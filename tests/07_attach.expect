@@ -1,0 +1,114 @@
+#!/usr/bin/expect -f
+# 07_attach.expect — Interactive attach test (root needed, expect)
+
+set timeout 60
+set vm_name [lindex $argv 0]
+
+if {$vm_name eq ""} {
+    puts "Usage: expect 07_attach.expect <vm_name>"
+    exit 1
+}
+
+# Determine binary path
+set chvm "./target/release/chvm"
+if {![file executable $chvm]} {
+    set chvm "./target/debug/chvm"
+}
+if {![file executable $chvm]} {
+    puts "FAIL: chvm binary not found"
+    exit 1
+}
+
+set pass_count 0
+set fail_count 0
+
+# Start a detached VM (use exec instead of spawn to avoid expect interaction)
+set rc [catch {exec $chvm run -d --name $vm_name alpine:latest sleep 3600 2>@1} output]
+if {$rc != 0} {
+    puts "FAIL: could not start VM: $output"
+    exit 1
+}
+
+# Wait for VM to be ready
+puts "Waiting for VM to start..."
+set ready 0
+for {set i 0} {$i < 60} {incr i} {
+    set rc [catch {exec $chvm list 2>@1} output]
+    if {[string match -nocase "*$vm_name*running*" $output]} {
+        set ready 1
+        break
+    }
+    sleep 1
+}
+if {!$ready} {
+    puts "FAIL: VM did not reach Running state"
+    catch {exec $chvm rm -f $vm_name 2>@1}
+    exit 1
+}
+
+# Extra wait for vsock readiness
+sleep 5
+
+# Attach to the VM
+spawn $chvm attach $vm_name
+expect {
+    -re {[#$] } {
+        puts "\nPASS: got shell prompt"
+        incr pass_count
+    }
+    timeout {
+        puts "\nFAIL: no shell prompt within timeout"
+        incr fail_count
+        catch {exec $chvm rm -f $vm_name 2>@1}
+        exit 1
+    }
+}
+
+# Run a command
+send "echo EXPECT_TEST_OK\r"
+expect {
+    "EXPECT_TEST_OK" {
+        puts "PASS: command echo works"
+        incr pass_count
+    }
+    timeout {
+        puts "FAIL: no echo response"
+        incr fail_count
+    }
+}
+
+# Check we can run another command
+send "ls /\r"
+expect {
+    "bin" {
+        puts "PASS: ls / shows bin"
+        incr pass_count
+    }
+    timeout {
+        puts "FAIL: ls / did not return expected output"
+        incr fail_count
+    }
+}
+
+# Exit shell
+send "exit\r"
+expect eof
+
+# Cleanup
+catch {exec $chvm rm -f $vm_name 2>@1}
+
+puts ""
+puts "--- Attach Test Results ---"
+puts "  PASS: $pass_count  FAIL: $fail_count"
+
+# Write results file for aggregation
+if {[info exists ::env(RESULTS_FILE)]} {
+    set rf [open $::env(RESULTS_FILE) w]
+    puts $rf "$pass_count $fail_count 0"
+    close $rf
+}
+
+if {$fail_count > 0} {
+    exit 1
+}
+exit 0

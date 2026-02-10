@@ -1,0 +1,288 @@
+# chvm
+
+A Docker-like CLI for managing lightweight microVMs powered by [Cloud Hypervisor](https://www.cloudhypervisor.org/).
+
+chvm lets you pull OCI container images and run them as hardware-isolated virtual machines with a familiar Docker-style workflow. Each VM boots a real Linux kernel with its own network stack, achieving stronger isolation than containers while maintaining a simple user experience.
+
+## Features
+
+- **Docker-like CLI** -- `chvm run`, `chvm exec`, `chvm attach`, `chvm stop`, `chvm rm`
+- **OCI image support** -- Pull public images from Docker Hub and other OCI-compatible registries
+- **Fast boot** -- MicroVMs start in 2-5 seconds
+- **TAP networking** -- Bridge-based networking with NAT, port forwarding, and DNS
+- **Mycelium networking** -- Peer-to-peer IPv6 overlay network with automatic binary injection and IP tracking
+- **Volume mounts** -- Share host directories with VMs via virtiofs
+- **Exec & attach** -- Execute commands or get an interactive shell via vsock
+- **Kernel management** -- Extract, select, and check host kernels automatically
+- **Resource control** -- Configure vCPUs, memory, environment variables per VM
+
+## Requirements
+
+- Linux with KVM support (`/dev/kvm`)
+- [Cloud Hypervisor](https://github.com/cloud-hypervisor/cloud-hypervisor) v50+
+- [virtiofsd](https://gitlab.com/virtio-fs/virtiofsd) (for volume mounts and virtiofs storage)
+- Root privileges (or `doas`/`sudo`) for VM operations
+- `mkfs.ext4`, `iptables`, `ip` (iproute2)
+
+## Quick Start
+
+```bash
+# Build (requires musl target: rustup target add x86_64-unknown-linux-musl)
+make build
+
+# Check system readiness
+chvm doctor
+
+# Extract a kernel from the running host
+sudo chvm kernel extract-host
+
+# Pull an image and run a VM
+sudo chvm run --rm alpine:latest echo "Hello from a microVM!"
+
+# Run a detached VM
+sudo chvm run -d --name myvm alpine:latest sleep 3600
+
+# Execute a command inside the VM
+sudo chvm exec myvm cat /etc/os-release
+
+# Get an interactive shell
+sudo chvm attach myvm
+
+# Stop and remove
+sudo chvm stop myvm
+sudo chvm rm myvm
+```
+
+## Installation
+
+### From Source
+
+```bash
+git clone https://github.com/geomind/chvm.git
+cd chvm
+
+# Install musl target (one-time)
+rustup target add x86_64-unknown-linux-musl
+
+# Build everything (host CLI + statically-linked guest init)
+make build
+
+# Binary is at ./target/release/chvm
+# Optionally install system-wide:
+sudo cp target/release/chvm /usr/local/bin/
+```
+
+### System Setup
+
+```bash
+# Check what's needed
+chvm doctor
+
+# Setup kernel and network bridge
+sudo chvm setup
+```
+
+## Usage
+
+### Images
+
+```bash
+# Pull from Docker Hub (public images only — no auth support yet)
+chvm pull alpine:latest
+chvm pull ubuntu:22.04
+
+# Pull from other public registries
+chvm pull ghcr.io/user/public-repo:v1
+
+# List cached images
+chvm images
+```
+
+### VM Lifecycle
+
+```bash
+# Run foreground (blocks until VM exits)
+sudo chvm run --rm alpine:latest echo hello
+
+# Run detached
+sudo chvm run -d --name web alpine:latest sleep 3600
+
+# Create without starting
+sudo chvm create --name worker alpine:latest sleep 3600
+sudo chvm start worker
+
+# Stop, remove
+sudo chvm stop web
+sudo chvm rm web
+
+# Force remove a running VM
+sudo chvm rm -f worker
+
+# Remove all stopped VMs
+sudo chvm prune
+```
+
+### Inspecting VMs
+
+```bash
+# List running VMs
+sudo chvm list
+
+# List all VMs (including stopped)
+sudo chvm list --all
+
+# Show detailed VM info as JSON
+sudo chvm inspect myvm
+
+# Show console logs
+sudo chvm logs myvm
+```
+
+### Executing Commands
+
+```bash
+# Run a command
+sudo chvm exec myvm cat /etc/os-release
+
+# Commands with flags work naturally
+sudo chvm exec myvm ping -c 4 8.8.8.8
+
+# With environment variables (flags before the container name)
+sudo chvm exec -e FOO=bar myvm env
+
+# With working directory
+sudo chvm exec -w /tmp myvm pwd
+
+# Interactive shell
+sudo chvm attach myvm
+```
+
+### Networking
+
+```bash
+# Default: TAP networking with bridge (192.168.200.0/24)
+sudo chvm run -d --name net-demo alpine:latest sleep 3600
+
+# Port forwarding (tcp by default, or specify /udp)
+sudo chvm run -d --name web -p 8080:80 -p 5353:53/udp alpine:latest sleep 3600
+
+# Mycelium peer-to-peer networking
+sudo chvm run -d --name myc1 --network mycelium \
+  --mycelium-peers tcp://188.40.132.242:9651 alpine:latest sleep 3600
+
+# Inspect to see the mycelium IPv6 address
+sudo chvm inspect myc1 | jq '.network_state.mycelium_ip'
+
+# No networking
+sudo chvm run -d --network none alpine:latest sleep 3600
+```
+
+### Resources
+
+```bash
+# Custom CPU and memory
+sudo chvm run --rm --cpus 2 --memory 1024 alpine:latest free -m
+
+# Environment variables
+sudo chvm run --rm -e DB_HOST=localhost -e DB_PORT=5432 alpine:latest env
+```
+
+### Storage
+
+```bash
+# Mount a host directory into the VM
+sudo chvm run --rm -v /path/on/host:/mnt/data alpine:latest ls /mnt/data
+
+# Read-only mount
+sudo chvm run --rm -v /path/on/host:/mnt/data:ro alpine:latest cat /mnt/data/file.txt
+
+# Use virtiofs storage backend (requires virtiofsd + kernel with virtiofs support)
+sudo chvm run --rm --storage virtiofs alpine:latest echo hello
+
+# Use a local rootfs directory instead of an OCI image
+sudo chvm run --rm --rootfs /path/to/rootfs alpine:latest /bin/sh -c "echo custom rootfs"
+```
+
+**Storage backends:**
+
+| Backend | Flag | Description |
+|---------|------|-------------|
+| `block` (default) | `--storage block` | Creates an ext4 disk image. Works with any kernel. No extra daemons. |
+| `virtiofs` | `--storage virtiofs` | Uses overlay + virtiofsd. Requires `virtiofsd` and a kernel with `CONFIG_FUSE_FS` + `CONFIG_VIRTIO_FS`. The custom kernel (`vmlinux-chvm-6.6.70`) has these built-in; the host-extracted kernel typically does not. |
+
+See [Kernel Management](#kernel-management) for building a custom kernel.
+
+### Kernel Management
+
+```bash
+# List available kernels
+chvm kernel list
+
+# Extract kernel from running host
+sudo chvm kernel extract-host
+
+# Build a custom minimal kernel (recommended for best performance)
+bash scripts/build-kernel.sh
+chvm kernel set-default vmlinux-chvm-6.6.70
+
+# Check kernel capabilities
+chvm kernel check
+```
+
+## Configuration
+
+chvm stores its data in `~/.chvm/` (configurable via `CHVM_HOME`):
+
+```
+~/.chvm/
+  config.json       # Global configuration
+  bin/              # Helper binaries (chvm-init, mycelium)
+  kernels/          # Kernel binaries
+  images/           # OCI image cache
+  vms/              # Per-VM state and data
+```
+
+### config.json
+
+```json
+{
+  "base_dir": "/home/user/.chvm",
+  "default_vcpu": 1,
+  "default_memory_mb": 512,
+  "default_network_mode": "tap",
+  "default_storage_backend": "block",
+  "default_bridge": "chvm0",
+  "kernel_path": null,
+  "virtiofsd_bin": null,
+  "cloud_hypervisor_bin": null
+}
+```
+
+## Architecture
+
+chvm is structured as a Rust workspace with three crates:
+
+| Crate | Purpose |
+|-------|---------|
+| `chvm-cli` | CLI binary with clap-based command parsing |
+| `chvm-lib` | Core library: VM management, OCI, networking, storage, hypervisor API |
+| `chvm-init` | Guest init binary (PID 1 inside VMs), statically linked with musl |
+
+See [docs/architecture.md](docs/architecture.md) for detailed design documentation.
+
+## TODO
+
+- [ ] Registry authentication (`chvm login`, Docker config, credential helpers)
+
+## Documentation
+
+- [Concepts](docs/concepts.md) -- Core concepts, how components interact, end-to-end flows
+- [Architecture](docs/architecture.md) -- System design, crate structure, data flow
+- [Components](docs/components.md) -- Detailed component design for each subsystem
+- [User Guide](docs/user-guide.md) -- Complete CLI reference and configuration
+- [Tutorial](docs/tutorial.md) -- Step-by-step getting started guide
+- [Testing](docs/testing.md) -- Test suite structure and how to run tests
+
+## License
+
+MIT

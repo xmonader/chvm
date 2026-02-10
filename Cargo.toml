@@ -1,0 +1,72 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/chvm-cli",
+    "crates/chvm-lib",
+    "crates/chvm-init",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+
+[workspace.dependencies]
+# Serialization
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+
+# Error handling
+thiserror = "2.0"
+anyhow = "1.0"
+
+# Logging
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# Async
+tokio = { version = "1", features = ["full"] }
+
+# HTTP / Unix socket
+hyper = { version = "1", features = ["client", "http1"] }
+hyper-util = { version = "0.1", features = ["tokio", "client-legacy", "http1"] }
+http-body-util = "0.1"
+hyperlocal = "0.9"
+
+# CLI
+clap = { version = "4.5", features = ["derive"] }
+
+# OCI
+oci-distribution = "0.11"
+oci-spec = "0.7"
+
+# Archive
+tar = "0.4"
+flate2 = "1.0"
+zstd = "0.13"
+
+# Terminal
+crossterm = "0.28"
+
+# Linux
+nix = { version = "0.29", features = ["fs", "mount", "signal", "process", "net", "ioctl", "socket", "user"] }
+libc = "0.2"
+
+# Misc
+base64 = "0.22"
+uuid = { version = "1", features = ["v4"] }
+chrono = { version = "0.4", features = ["serde"] }
+sha2 = "0.10"
+hex = "0.4"
+dirs = "6"
+rand = "0.8"
+ipnetwork = "0.20"
+futures = "0.3"
+bytes = "1"
+tabled = "0.17"
+which = "7"
+async-trait = "0.1"
+tempfile = "3"
+
+# Internal
+chvm-lib = { path = "crates/chvm-lib" }
