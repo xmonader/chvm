@@ -127,6 +127,7 @@ console=hvc0 root=/dev/vda rw init=/chvm-init
   chvm.ip=192.168.200.2/24
   chvm.gw=192.168.200.1
   chvm.mycelium_peer=tcp://188.40.132.242:9651
+  chvm.mycelium_peer=tcp://136.243.47.186:9651
   chvm.mount_0=/mnt/data
 ```
 

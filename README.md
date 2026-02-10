@@ -168,7 +168,9 @@ sudo chvm run -d --name web -p 8080:80 -p 5353:53/udp alpine:latest sleep 3600
 
 # Mycelium peer-to-peer networking
 sudo chvm run -d --name myc1 --network mycelium \
-  --mycelium-peers tcp://188.40.132.242:9651 alpine:latest sleep 3600
+  --mycelium-peers tcp://188.40.132.242:9651 \
+  --mycelium-peers tcp://136.243.47.186:9651 \
+  alpine:latest sleep 3600
 
 # Inspect to see the mycelium IPv6 address
 sudo chvm inspect myc1 | jq '.network_state.mycelium_ip'

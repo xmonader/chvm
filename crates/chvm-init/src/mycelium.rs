@@ -30,7 +30,6 @@ pub fn setup_mycelium() -> Result<(), Box<dyn std::error::Error>> {
     let mut args = vec![
         "--key-file".to_string(), key,
         "--tun-name".to_string(), "mycelium".to_string(),
-        "--disable-peer-discovery".to_string(),
         "--disable-quic".to_string(),
     ];
 

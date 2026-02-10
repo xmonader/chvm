@@ -398,7 +398,9 @@ The mycelium binary is automatically injected into the guest rootfs when `--netw
 
 ```bash
 chvm run -d --name myc1 --network mycelium \
-  --mycelium-peers tcp://188.40.132.242:9651 alpine:latest sleep 3600
+  --mycelium-peers tcp://188.40.132.242:9651 \
+  --mycelium-peers tcp://136.243.47.186:9651 \
+  alpine:latest sleep 3600
 ```
 
 After boot, the guest will have both a TAP interface (`eth0`) for local/internet access and a mycelium TUN interface with a global IPv6 address.
@@ -425,8 +427,14 @@ Two VMs on the mycelium network can reach each other via their IPv6 addresses:
 
 ```bash
 # Start two VMs
-chvm run -d --name myc1 --network mycelium --mycelium-peers tcp://188.40.132.242:9651 alpine:latest sleep 3600
-chvm run -d --name myc2 --network mycelium --mycelium-peers tcp://188.40.132.242:9651 alpine:latest sleep 3600
+chvm run -d --name myc1 --network mycelium \
+  --mycelium-peers tcp://188.40.132.242:9651 \
+  --mycelium-peers tcp://136.243.47.186:9651 \
+  alpine:latest sleep 3600
+chvm run -d --name myc2 --network mycelium \
+  --mycelium-peers tcp://188.40.132.242:9651 \
+  --mycelium-peers tcp://136.243.47.186:9651 \
+  alpine:latest sleep 3600
 
 # Get myc2's address
 MYC2_IP=$(chvm inspect myc2 | jq -r '.network_state.mycelium_ip')

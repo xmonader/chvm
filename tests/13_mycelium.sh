@@ -41,11 +41,13 @@ if ! $MYCELIUM_FOUND; then
     exit 0
 fi
 
-# --- Start two VMs with mycelium pointing to public peer ---
+# --- Start two VMs with mycelium pointing to public peers ---
 
 VM1_NAME="${TEST_PREFIX}-myc1"
 VM2_NAME="${TEST_PREFIX}-myc2"
-PUBLIC_PEER="tcp://188.40.132.242:9651"
+# Use multiple public peers for faster route convergence
+# Full list: https://github.com/threefoldtech/mycelium#hosted-public-nodes
+PUBLIC_PEERS="tcp://188.40.132.242:9651,tcp://136.243.47.186:9651,tcp://185.69.166.7:9651,tcp://65.21.231.58:9651,tcp://209.159.146.190:9651"
 
 cleanup_mycelium() {
     cleanup_vm "$VM1_NAME" 2>/dev/null || true
@@ -53,9 +55,16 @@ cleanup_mycelium() {
 }
 trap cleanup_mycelium EXIT
 
+# Split comma-separated peers into separate --mycelium-peers flags
+PEER_FLAGS=""
+IFS=',' read -ra PEER_ARRAY <<< "$PUBLIC_PEERS"
+for p in "${PEER_ARRAY[@]}"; do
+    PEER_FLAGS="$PEER_FLAGS --mycelium-peers $p"
+done
+
 $CHVM run -d --name "$VM1_NAME" \
     --network mycelium \
-    --mycelium-peers "$PUBLIC_PEER" \
+    $PEER_FLAGS \
     alpine:latest sleep 3600 >/dev/null 2>&1
 
 if wait_vm_running "$VM1_NAME" 30; then
@@ -69,7 +78,7 @@ fi
 
 $CHVM run -d --name "$VM2_NAME" \
     --network mycelium \
-    --mycelium-peers "$PUBLIC_PEER" \
+    $PEER_FLAGS \
     alpine:latest sleep 3600 >/dev/null 2>&1
 
 if wait_vm_running "$VM2_NAME" 30; then
@@ -141,17 +150,17 @@ fi
 # --- Test: Both VMs connected to public peer ---
 
 vm1_peer=$($CHVM exec "$VM1_NAME" -- netstat -tn 2>&1) || true
-if echo "$vm1_peer" | grep -q "188.40.132.242:9651.*ESTABLISHED"; then
+if echo "$vm1_peer" | grep -q ":9651.*ESTABLISHED"; then
     pass "VM1 connected to public mycelium peer"
 else
-    skip "VM1 connected to public mycelium peer" "No ESTABLISHED connection to peer"
+    skip "VM1 connected to public mycelium peer" "No ESTABLISHED connection to any peer"
 fi
 
 vm2_peer=$($CHVM exec "$VM2_NAME" -- netstat -tn 2>&1) || true
-if echo "$vm2_peer" | grep -q "188.40.132.242:9651.*ESTABLISHED"; then
+if echo "$vm2_peer" | grep -q ":9651.*ESTABLISHED"; then
     pass "VM2 connected to public mycelium peer"
 else
-    skip "VM2 connected to public mycelium peer" "No ESTABLISHED connection to peer"
+    skip "VM2 connected to public mycelium peer" "No ESTABLISHED connection to any peer"
 fi
 
 # --- Test: VM1 can ping VM2 via mycelium ---
