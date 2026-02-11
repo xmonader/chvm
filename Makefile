@@ -1,7 +1,7 @@
 MUSL_TARGET := x86_64-unknown-linux-musl
 
 .PHONY: build build-debug release test unit-test integration-test check fmt fmt-check clippy clean install doctor prune init \
-       docker-build docker-build-alpine docker-build-ubuntu docker-build-nginx docker-build-redis
+       docker-build docker-build-alpine docker-build-ubuntu docker-build-nginx docker-build-redis docker-build-ssh
 
 # Default target
 all: build
@@ -72,7 +72,7 @@ clean:
 DOCKER_DIR := dockers
 
 # Build all example Docker images
-docker-build: docker-build-alpine docker-build-ubuntu docker-build-nginx docker-build-redis
+docker-build: docker-build-alpine docker-build-ubuntu docker-build-nginx docker-build-redis docker-build-ssh
 
 # Build individual images
 docker-build-alpine:
@@ -86,3 +86,6 @@ docker-build-nginx:
 
 docker-build-redis:
 	docker build -t localhost/chvm-redis-cache:latest $(DOCKER_DIR)/redis-cache
+
+docker-build-ssh:
+	docker build -t localhost/chvm-alpine-ssh:latest $(DOCKER_DIR)/alpine-ssh

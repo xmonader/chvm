@@ -45,7 +45,7 @@ sudo chvm run -d --name myvm alpine:latest sleep 3600
 # Execute a command inside the VM
 sudo chvm exec myvm cat /etc/os-release
 
-# Get an interactive shell
+# Get an interactive shell (detach with Ctrl+P, Ctrl+Q)
 sudo chvm attach myvm
 
 # Stop and remove
@@ -153,7 +153,7 @@ sudo chvm exec -e FOO=bar myvm env
 # With working directory
 sudo chvm exec -w /tmp myvm pwd
 
-# Interactive shell
+# Interactive shell (detach with Ctrl+P, Ctrl+Q)
 sudo chvm attach myvm
 ```
 

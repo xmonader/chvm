@@ -182,12 +182,13 @@ Attach an interactive shell to a running VM.
 chvm attach <CONTAINER>
 ```
 
-Opens a PTY-based shell session. The shell is determined by what's available in the guest (`bash`, `ash`, or `sh`). Type `exit` to detach.
+Opens a PTY-based shell session. The shell is determined by what's available in the guest (`bash`, `ash`, or `sh`). Detach with `Ctrl+P, Ctrl+Q` (leaves the VM running), or type `exit` to end the shell.
 
 ```bash
 chvm attach myvm
 # You're now inside the VM
-# Type 'exit' to return
+# Ctrl+P, Ctrl+Q to detach (VM keeps running)
+# Type 'exit' to end the shell
 ```
 
 ---
