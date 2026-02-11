@@ -1,23 +1,18 @@
 MUSL_TARGET := x86_64-unknown-linux-musl
 
-.PHONY: build build-debug release test unit-test integration-test check fmt fmt-check clippy clean install doctor prune init \
+.PHONY: build build-debug release test unit-test integration-test check fmt fmt-check clippy clean install doctor prune \
        docker-build docker-build-alpine docker-build-ubuntu docker-build-nginx docker-build-redis docker-build-ssh
 
 # Default target
 all: build
 
-# Build chvm-init with musl (statically linked for guest VMs)
-init:
-	cargo build -p chvm-init --release --target $(MUSL_TARGET)
+# Build all binaries statically linked with musl
+build:
+	cargo build --workspace --release --target $(MUSL_TARGET)
 
-# Build release binaries (host + guest init)
-build: init
-	cargo build --workspace --release
-
-# Build debug binaries
+# Build debug binaries (also statically linked)
 build-debug:
-	cargo build -p chvm-init --target $(MUSL_TARGET)
-	cargo build --workspace
+	cargo build --workspace --target $(MUSL_TARGET)
 
 # Alias for build
 release: build
@@ -50,18 +45,18 @@ clippy:
 	cargo clippy --workspace -- -D warnings
 
 # Install binaries to ~/.cargo/bin and ~/.chvm/bin
-install: init
-	cargo install --path crates/chvm-cli
-	mkdir -p ~/.chvm/bin
+install: build
+	mkdir -p ~/.cargo/bin ~/.chvm/bin
+	cp target/$(MUSL_TARGET)/release/chvm ~/.cargo/bin/chvm
 	cp target/$(MUSL_TARGET)/release/chvm-init ~/.chvm/bin/chvm-init
 
 # Run chvm doctor
 doctor: build
-	./target/release/chvm doctor
+	./target/$(MUSL_TARGET)/release/chvm doctor
 
 # Prune stopped VMs and clean stale resources
 prune: build
-	doas ./target/release/chvm prune
+	doas ./target/$(MUSL_TARGET)/release/chvm prune
 
 # Clean build artifacts
 clean:
