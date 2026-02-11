@@ -106,6 +106,8 @@ chvm login ghcr.io
 chvm logout docker.io
 ```
 
+> **Note:** Credentials are stored as base64-encoded tokens in `~/.docker/config.json`
+
 ### VM Lifecycle
 
 ```bash
@@ -330,7 +332,6 @@ chvm is structured as a Rust workspace with three crates:
 | `chvm-init` | Guest init binary (PID 1 inside VMs), statically linked with musl     |
 
 See [docs/architecture.md](docs/architecture.md) for detailed design documentation.
-
 
 ## Documentation
 

@@ -19,3 +19,4 @@ tracing-subscriber = { workspace = true }
 tokio = { workspace = true }
 chrono = { workspace = true }
 which = { workspace = true }
+rpassword = { workspace = true }

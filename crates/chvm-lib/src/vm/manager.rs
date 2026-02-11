@@ -179,7 +179,7 @@ impl VmManager {
         info!(image = image_ref, "Pulling image");
 
         // Try registry pull first
-        match oci::pull::pull_image(image_ref, &self.paths.images).await {
+        match oci::pull::pull_image(image_ref, &self.paths.images, credentials).await {
             Ok(result) => {
                 let cached = self.image_cache.add(&result)?;
                 return Ok(cached);

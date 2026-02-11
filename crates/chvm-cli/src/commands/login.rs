@@ -11,38 +11,28 @@ pub fn execute(args: &LoginArgs) -> anyhow::Result<()> {
             io::stdout().flush()?;
             let mut line = String::new();
             io::stdin().lock().read_line(&mut line)?;
-            let trimmed = line.trim().to_string();
-            if trimmed.is_empty() {
-                anyhow::bail!("Username cannot be empty");
-            }
-            trimmed
+            line.trim().to_string()
         }
     };
+
+    if username.is_empty() {
+        anyhow::bail!("Username cannot be empty");
+    }
 
     let password = if args.password_stdin {
         let mut line = String::new();
         io::stdin().lock().read_line(&mut line)?;
-        let trimmed = line.trim().to_string();
-        if trimmed.is_empty() {
-            anyhow::bail!("Password cannot be empty");
-        }
-        trimmed
+        line.trim().to_string()
     } else {
         match &args.password {
             Some(p) => p.clone(),
-            None => {
-                print!("Password: ");
-                io::stdout().flush()?;
-                let mut line = String::new();
-                io::stdin().lock().read_line(&mut line)?;
-                let trimmed = line.trim().to_string();
-                if trimmed.is_empty() {
-                    anyhow::bail!("Password cannot be empty");
-                }
-                trimmed
-            }
+            None => rpassword::prompt_password_stdout("Password: ")?,
         }
     };
+
+    if password.is_empty() {
+        anyhow::bail!("Password cannot be empty");
+    }
 
     let config_path = docker_config_path()
         .ok_or_else(|| anyhow::anyhow!("Could not determine Docker config path"))?;
