@@ -197,12 +197,13 @@ pub struct RmArgs {
 }
 
 #[derive(clap::Args)]
+#[command(trailing_var_arg = true)]
 pub struct ExecArgs {
     /// Container ID or name
     pub container: String,
 
     /// Command to execute
-    #[arg(last = true)]
+    #[arg(allow_hyphen_values = true)]
     pub cmd: Vec<String>,
 
     /// Environment variables
