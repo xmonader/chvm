@@ -30,14 +30,21 @@ pub fn run_exec_server() {
 }
 
 pub fn run_shell_server() {
-    run_server(VSOCK_PORT_SHELL, "Shell", crate::shell_handler::handle_shell);
+    run_server(
+        VSOCK_PORT_SHELL,
+        "Shell",
+        crate::shell_handler::handle_shell,
+    );
 }
 
 fn create_vsock_listener(port: u32) -> Result<i32, String> {
     unsafe {
         let fd = libc::socket(libc::AF_VSOCK, libc::SOCK_STREAM, 0);
         if fd < 0 {
-            return Err(format!("socket() failed: {}", std::io::Error::last_os_error()));
+            return Err(format!(
+                "socket() failed: {}",
+                std::io::Error::last_os_error()
+            ));
         }
 
         // Build sockaddr_vm
@@ -51,12 +58,18 @@ fn create_vsock_listener(port: u32) -> Result<i32, String> {
 
         if libc::bind(fd, addr_ptr, addr_len) < 0 {
             libc::close(fd);
-            return Err(format!("bind() failed: {}", std::io::Error::last_os_error()));
+            return Err(format!(
+                "bind() failed: {}",
+                std::io::Error::last_os_error()
+            ));
         }
 
         if libc::listen(fd, 5) < 0 {
             libc::close(fd);
-            return Err(format!("listen() failed: {}", std::io::Error::last_os_error()));
+            return Err(format!(
+                "listen() failed: {}",
+                std::io::Error::last_os_error()
+            ));
         }
 
         Ok(fd)

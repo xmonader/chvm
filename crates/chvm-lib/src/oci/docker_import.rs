@@ -36,7 +36,11 @@ pub fn find_local_runtime(image_ref: &str) -> Option<&'static str> {
 ///
 /// We extract this to the chvm images directory and return a PullResult
 /// compatible with the existing cache.
-pub fn import_from_local(runtime: &str, image_ref: &str, images_dir: &Path) -> anyhow::Result<PullResult> {
+pub fn import_from_local(
+    runtime: &str,
+    image_ref: &str,
+    images_dir: &Path,
+) -> anyhow::Result<PullResult> {
     info!(image = %image_ref, runtime = %runtime, "Importing from local container runtime");
 
     let output = Command::new(runtime)
@@ -55,7 +59,11 @@ pub fn import_from_local(runtime: &str, image_ref: &str, images_dir: &Path) -> a
 
 /// Parse an OCI layout tar (from `docker save` / `podman save`) and import
 /// layers into the chvm image cache.
-fn parse_oci_tar(tar_data: &[u8], image_ref: &str, images_dir: &Path) -> anyhow::Result<PullResult> {
+fn parse_oci_tar(
+    tar_data: &[u8],
+    image_ref: &str,
+    images_dir: &Path,
+) -> anyhow::Result<PullResult> {
     // Extract the tar to a temporary directory
     let tmp_dir = tempfile::tempdir_in(images_dir)?;
     let mut archive = tar::Archive::new(std::io::Cursor::new(tar_data));

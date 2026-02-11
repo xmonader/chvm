@@ -22,7 +22,8 @@ pub fn load_config() -> InitConfig {
         if let Some(encoded) = part.strip_prefix("chvm.cmd=") {
             if let Ok(decoded) = base64::engine::general_purpose::STANDARD.decode(encoded) {
                 if let Ok(s) = String::from_utf8(decoded) {
-                    let args: Vec<String> = s.split('\0')
+                    let args: Vec<String> = s
+                        .split('\0')
                         .filter(|a| !a.is_empty())
                         .map(|a| a.to_string())
                         .collect();

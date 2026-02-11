@@ -13,7 +13,10 @@ pub fn execute(manager: &VmManager, args: &LogsArgs) -> anyhow::Result<()> {
         let vm_dir = manager.paths.vm_dir(&state.id);
         let default_log = vm_dir.join("console.log");
         let default_log_str = default_log.to_string_lossy();
-        let log_path = state.vm_config.log_path.as_deref()
+        let log_path = state
+            .vm_config
+            .log_path
+            .as_deref()
             .unwrap_or(&default_log_str);
 
         let mut file = std::fs::File::open(log_path)?;

@@ -1,8 +1,11 @@
 /// Standard PATH directories for binary lookup.
 pub const STANDARD_PATH: &[&str] = &[
-    "/usr/local/sbin", "/usr/local/bin",
-    "/usr/sbin", "/usr/bin",
-    "/sbin", "/bin",
+    "/usr/local/sbin",
+    "/usr/local/bin",
+    "/usr/sbin",
+    "/usr/bin",
+    "/sbin",
+    "/bin",
 ];
 
 /// Standard PATH string for environment setup.

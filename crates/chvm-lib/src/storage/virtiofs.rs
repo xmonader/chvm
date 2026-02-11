@@ -120,10 +120,14 @@ impl StorageBackend for VirtioFsStorage {
 }
 
 fn find_virtiofsd() -> anyhow::Result<String> {
-    crate::utils::find_command("virtiofsd", &[
-        "/usr/libexec/virtiofsd",
-        "/usr/lib/virtiofsd",
-        "/usr/local/bin/virtiofsd",
-        "/usr/bin/virtiofsd",
-    ]).ok_or_else(|| anyhow::anyhow!("virtiofsd not found. Install virtiofsd."))
+    crate::utils::find_command(
+        "virtiofsd",
+        &[
+            "/usr/libexec/virtiofsd",
+            "/usr/lib/virtiofsd",
+            "/usr/local/bin/virtiofsd",
+            "/usr/bin/virtiofsd",
+        ],
+    )
+    .ok_or_else(|| anyhow::anyhow!("virtiofsd not found. Install virtiofsd."))
 }

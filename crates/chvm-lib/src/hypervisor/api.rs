@@ -1,7 +1,7 @@
+use http_body_util::{BodyExt, Full};
 use hyper::body::Bytes;
 use hyper::Request;
 use hyper_util::rt::TokioIo;
-use http_body_util::{BodyExt, Full};
 use tokio::net::UnixStream;
 use tracing::debug;
 
@@ -41,12 +41,16 @@ async fn api_request(
         .body(body_bytes)
         .map_err(|e| ChvmError::ApiError(format!("failed to build request: {e}")))?;
 
-    let resp = sender.send_request(req)
+    let resp = sender
+        .send_request(req)
         .await
         .map_err(|e| ChvmError::ApiError(format!("request failed: {e}")))?;
 
     let status = resp.status();
-    let body = resp.into_body().collect().await
+    let body = resp
+        .into_body()
+        .collect()
+        .await
         .map_err(|e| ChvmError::ApiError(format!("failed to read response: {e}")))?
         .to_bytes()
         .to_vec();

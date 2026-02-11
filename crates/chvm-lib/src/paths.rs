@@ -43,7 +43,14 @@ impl Paths {
     }
 
     pub fn ensure_dirs(&self) -> std::io::Result<()> {
-        for dir in [&self.base, &self.images, &self.vms, &self.cache, &self.logs, &self.kernels] {
+        for dir in [
+            &self.base,
+            &self.images,
+            &self.vms,
+            &self.cache,
+            &self.logs,
+            &self.kernels,
+        ] {
             std::fs::create_dir_all(dir)?;
         }
         Ok(())
@@ -67,4 +74,85 @@ fn get_user_home(username: &str) -> PathBuf {
         }
     }
     Path::new("/home").join(username)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::TempDir;
+
+    #[test]
+    fn test_paths_new() {
+        let base = PathBuf::from("/test/chvm");
+        let paths = Paths::new(base.clone());
+
+        assert_eq!(paths.base, PathBuf::from("/test/chvm"));
+        assert_eq!(paths.images, PathBuf::from("/test/chvm/images"));
+        assert_eq!(paths.vms, PathBuf::from("/test/chvm/vms"));
+        assert_eq!(paths.cache, PathBuf::from("/test/chvm/cache"));
+        assert_eq!(paths.logs, PathBuf::from("/test/chvm/logs"));
+        assert_eq!(paths.kernels, PathBuf::from("/test/chvm/kernels"));
+        assert_eq!(paths.config_file, PathBuf::from("/test/chvm/config.json"));
+    }
+
+    #[test]
+    fn test_vm_dir() {
+        let paths = Paths::new(PathBuf::from("/test"));
+        let vm_dir = paths.vm_dir("test-vm-123");
+        assert_eq!(vm_dir, PathBuf::from("/test/vms/test-vm-123"));
+    }
+
+    #[test]
+    fn test_image_dir() {
+        let paths = Paths::new(PathBuf::from("/test"));
+        let image_dir = paths.image_dir("sha256-abc123");
+        assert_eq!(image_dir, PathBuf::from("/test/images/sha256-abc123"));
+    }
+
+    #[test]
+    fn test_ensure_dirs() {
+        let temp_dir = TempDir::new().unwrap();
+        let base = temp_dir.path().join("chvm");
+        let paths = Paths::new(base.clone());
+
+        paths.ensure_dirs().unwrap();
+
+        assert!(paths.base.exists());
+        assert!(paths.images.exists());
+        assert!(paths.vms.exists());
+        assert!(paths.cache.exists());
+        assert!(paths.logs.exists());
+        assert!(paths.kernels.exists());
+    }
+
+    #[test]
+    fn test_resolve_with_chvm_home() {
+        let temp_dir = TempDir::new().unwrap();
+        let custom_home = temp_dir.path().join("custom_chvm");
+
+        env::set_var("CHVM_HOME", custom_home.to_str().unwrap());
+        let paths = Paths::resolve();
+        env::remove_var("CHVM_HOME");
+
+        assert_eq!(paths.base, custom_home);
+    }
+
+    #[test]
+    fn test_paths_resolve_creates_valid_structure() {
+        let paths = Paths::resolve();
+
+        assert!(paths.base.to_string_lossy().contains(".chvm"));
+        assert!(paths.images.ends_with("images"));
+        assert!(paths.vms.ends_with("vms"));
+        assert!(paths.cache.ends_with("cache"));
+        assert!(paths.logs.ends_with("logs"));
+        assert!(paths.kernels.ends_with("kernels"));
+        assert!(paths.config_file.ends_with("config.json"));
+    }
+
+    #[test]
+    fn test_get_user_home_fallback() {
+        let home = get_user_home("testuser");
+        assert_eq!(home, PathBuf::from("/home/testuser"));
+    }
 }

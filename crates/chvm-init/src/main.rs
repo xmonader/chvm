@@ -61,7 +61,9 @@ fn main() {
     let config = cmdline_parser::load_config();
 
     // Set hostname
-    unsafe { libc::sethostname(c"chvm".as_ptr(), 4); }
+    unsafe {
+        libc::sethostname(c"chvm".as_ptr(), 4);
+    }
 
     // Start vsock servers in background threads
     std::thread::spawn(vsock_server::run_exec_server);
@@ -157,4 +159,3 @@ fn load_kernel_modules() {
         }
     }
 }
-

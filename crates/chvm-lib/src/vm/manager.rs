@@ -80,7 +80,9 @@ impl StateStore {
     }
 
     pub fn get(&self, vm_id: &str) -> Result<&RuntimeState> {
-        self.states.get(vm_id).ok_or_else(|| ChvmError::VmNotFound(vm_id.to_string()))
+        self.states
+            .get(vm_id)
+            .ok_or_else(|| ChvmError::VmNotFound(vm_id.to_string()))
     }
 
     pub fn get_by_name(&self, name: &str) -> Result<&RuntimeState> {
@@ -92,7 +94,8 @@ impl StateStore {
 
     /// Resolve a VM by ID or name, returning the state.
     pub fn resolve(&self, id_or_name: &str) -> Result<&RuntimeState> {
-        self.get(id_or_name).or_else(|_| self.get_by_name(id_or_name))
+        self.get(id_or_name)
+            .or_else(|_| self.get_by_name(id_or_name))
     }
 
     /// Resolve a VM by ID or name, returning a mutable clone.
@@ -118,7 +121,9 @@ impl StateStore {
     }
 
     pub fn update_status(&mut self, vm_id: &str, status: VmState) -> Result<()> {
-        let state = self.states.get_mut(vm_id)
+        let state = self
+            .states
+            .get_mut(vm_id)
             .ok_or_else(|| ChvmError::VmNotFound(vm_id.to_string()))?;
         state.status = status;
         let data = serde_json::to_string_pretty(state)?;
@@ -181,18 +186,27 @@ impl VmManager {
         match oci::pull::pull_image(image_ref, &self.paths.images).await {
             Ok(result) => {
                 let cached = self.image_cache.add(&result)?;
-                return Ok(cached);
+                Ok(cached)
             }
             Err(registry_err) => {
                 // Registry pull failed — try local container runtimes (docker, podman)
                 if let Some(runtime) = oci::docker_import::find_local_runtime(image_ref) {
-                    info!(image = image_ref, runtime = runtime, "Registry pull failed, importing from local {runtime}");
-                    let result = oci::docker_import::import_from_local(runtime, image_ref, &self.paths.images)
-                        .map_err(|e| ChvmError::OciError(format!("{runtime} import failed: {e}")))?;
+                    info!(
+                        image = image_ref,
+                        runtime = runtime,
+                        "Registry pull failed, importing from local {runtime}"
+                    );
+                    let result = oci::docker_import::import_from_local(
+                        runtime,
+                        image_ref,
+                        &self.paths.images,
+                    )
+                    .map_err(|e| ChvmError::OciError(format!("{runtime} import failed: {e}")))?;
                     let cached = self.image_cache.add(&result)?;
-                    return Ok(cached);
+                    Ok(cached)
+                } else {
+                    Err(ChvmError::OciError(registry_err.to_string()))
                 }
-                return Err(ChvmError::OciError(registry_err.to_string()));
             }
         }
     }
@@ -200,7 +214,9 @@ impl VmManager {
     /// Create a new VM.
     pub async fn create(&mut self, opts: CreateOptions) -> Result<RuntimeState> {
         if opts.image_ref.is_none() && opts.rootfs_path.is_none() {
-            return Err(ChvmError::Other("either image_ref or rootfs_path must be specified".into()));
+            return Err(ChvmError::Other(
+                "either image_ref or rootfs_path must be specified".into(),
+            ));
         }
 
         let vm_id = uuid::Uuid::new_v4().simple().to_string()[..12].to_string();
@@ -216,7 +232,8 @@ impl VmManager {
         let vm_dir = self.paths.vm_dir(&vm_id);
         std::fs::create_dir_all(&vm_dir)?;
 
-        let vm_config = self.build_vm_config(&vm_id, &name, &opts, rootfs_path, image_config, &vm_dir)?;
+        let vm_config =
+            self.build_vm_config(&vm_id, &name, &opts, rootfs_path, image_config, &vm_dir)?;
 
         let state = RuntimeState {
             id: vm_id,
@@ -350,7 +367,9 @@ impl VmManager {
 
         if state.status == VmState::Running {
             if !force {
-                return Err(ChvmError::Other("VM is running, use --force to remove".into()));
+                return Err(ChvmError::Other(
+                    "VM is running, use --force to remove".into(),
+                ));
             }
             self.stop(&state.id).await?;
         }
@@ -384,7 +403,10 @@ impl VmManager {
         let state = self.state_store.resolve(id_or_name)?;
         let default_log = self.paths.vm_dir(&state.id).join("console.log");
         let default_log_str = default_log.to_string_lossy();
-        let log_path = state.vm_config.log_path.as_deref()
+        let log_path = state
+            .vm_config
+            .log_path
+            .as_deref()
             .unwrap_or(&default_log_str);
         match std::fs::read_to_string(log_path) {
             Ok(data) => Ok(data),
@@ -400,7 +422,9 @@ impl VmManager {
             return Err(ChvmError::VmNotRunning);
         }
 
-        let vsock_path = state.vm_config.vsock_socket_path()
+        let vsock_path = state
+            .vm_config
+            .vsock_socket_path()
             .ok_or_else(|| ChvmError::VsockError("no state dir".into()))?;
 
         crate::vsock::proxy::exec_command(&vsock_path, &opts).await
@@ -413,7 +437,9 @@ impl VmManager {
             return Err(ChvmError::VmNotRunning);
         }
 
-        let vsock_path = state.vm_config.vsock_socket_path()
+        let vsock_path = state
+            .vm_config
+            .vsock_socket_path()
             .ok_or_else(|| ChvmError::VsockError("no state dir".into()))?;
 
         crate::vsock::proxy::interactive_session(&vsock_path).await
@@ -424,14 +450,16 @@ impl VmManager {
         let ids: Vec<String> = self.state_store.states.keys().cloned().collect();
         for id in ids {
             let state = self.state_store.states.get(&id).unwrap().clone();
-            if state.status == VmState::Running && state.vmm_pid > 0
-                && !process_running(state.vmm_pid) {
-                    let mut updated = state;
-                    updated.status = VmState::Stopped;
-                    updated.stopped_at = Some(Utc::now());
-                    if let Err(e) = self.state_store.save(&updated) {
-                        warn!(vm_id = %id, error = %e, "Failed to persist stopped status");
-                    }
+            if state.status == VmState::Running
+                && state.vmm_pid > 0
+                && !process_running(state.vmm_pid)
+            {
+                let mut updated = state;
+                updated.status = VmState::Stopped;
+                updated.stopped_at = Some(Utc::now());
+                if let Err(e) = self.state_store.save(&updated) {
+                    warn!(vm_id = %id, error = %e, "Failed to persist stopped status");
+                }
             }
         }
         Ok(())
@@ -439,7 +467,9 @@ impl VmManager {
 
     /// Prune stopped VMs.
     pub async fn prune(&mut self) -> Result<Vec<String>> {
-        let stopped: Vec<String> = self.state_store.list()
+        let stopped: Vec<String> = self
+            .state_store
+            .list()
             .iter()
             .filter(|s| s.status == VmState::Stopped)
             .map(|s| s.id.clone())
@@ -466,7 +496,12 @@ impl VmManager {
         if let Some(ref rootfs) = opts.rootfs_path {
             let abs = std::fs::canonicalize(rootfs)?;
             validate_rootfs(&abs)?;
-            Ok((abs.to_string_lossy().to_string(), format!("local:{}", abs.display()), None, None))
+            Ok((
+                abs.to_string_lossy().to_string(),
+                format!("local:{}", abs.display()),
+                None,
+                None,
+            ))
         } else {
             let ref_str = opts.image_ref.as_deref().unwrap();
             let cached = match self.image_cache.get(ref_str) {
@@ -477,7 +512,12 @@ impl VmManager {
                 }
             };
             let rootfs = self.image_cache.ensure_rootfs(&cached)?;
-            Ok((rootfs, ref_str.to_string(), Some(cached.digest.clone()), cached.config.clone()))
+            Ok((
+                rootfs,
+                ref_str.to_string(),
+                Some(cached.digest.clone()),
+                cached.config.clone(),
+            ))
         }
     }
 
@@ -491,18 +531,20 @@ impl VmManager {
         image_config: Option<oci::ImageConfig>,
         vm_dir: &Path,
     ) -> Result<VmConfig> {
-        let storage_type = match opts.storage_backend.as_deref().unwrap_or(&self.config.default_storage_backend) {
+        let storage_type = match opts
+            .storage_backend
+            .as_deref()
+            .unwrap_or(&self.config.default_storage_backend)
+        {
             "virtiofs" => RootfsType::VirtioFs,
             _ => RootfsType::VirtioBlock,
         };
 
-        let net_mode = opts.network_mode.unwrap_or_else(|| {
-            self.config.default_network_mode.parse().unwrap_or_default()
-        });
-        let kernel_path = self.resolve_kernel_path(
-            opts.kernel_path.as_deref(),
-            &net_mode.to_string(),
-        )?;
+        let net_mode = opts
+            .network_mode
+            .unwrap_or_else(|| self.config.default_network_mode.parse().unwrap_or_default());
+        let kernel_path =
+            self.resolve_kernel_path(opts.kernel_path.as_deref(), &net_mode.to_string())?;
 
         let mut builder = VmBuilder::new(vm_id.to_string(), name.to_string())
             .rootfs(rootfs_path, storage_type)
@@ -563,7 +605,10 @@ impl VmManager {
             inject_mycelium: state.vm_config.network.mode == NetworkMode::Mycelium,
         };
 
-        backend.prepare(&config).await.map_err(|e| ChvmError::StorageError(e.to_string()))
+        backend
+            .prepare(&config)
+            .await
+            .map_err(|e| ChvmError::StorageError(e.to_string()))
     }
 
     async fn setup_network(&self, state: &mut RuntimeState, vm_dir: &Path) -> Result<()> {
@@ -583,7 +628,10 @@ impl VmManager {
             bridge: Some(self.config.default_bridge.clone()),
         };
 
-        let result = backend.setup(&config).await.map_err(|e| ChvmError::NetworkError(e.to_string()))?;
+        let result = backend
+            .setup(&config)
+            .await
+            .map_err(|e| ChvmError::NetworkError(e.to_string()))?;
 
         state.network_state = Some(NetworkState {
             tap_device: result.tap_device.clone(),
@@ -602,14 +650,26 @@ impl VmManager {
 
         // Update kernel cmdline with network info
         if let Some(ref ip) = result.ip_address {
-            state.vm_config.kernel.cmdline.push_str(&format!(" chvm.ip={}", ip));
+            state
+                .vm_config
+                .kernel
+                .cmdline
+                .push_str(&format!(" chvm.ip={}", ip));
         }
         if let Some(ref gw) = result.gateway {
-            state.vm_config.kernel.cmdline.push_str(&format!(" chvm.gw={}", gw));
+            state
+                .vm_config
+                .kernel
+                .cmdline
+                .push_str(&format!(" chvm.gw={}", gw));
         }
         if result.mycelium_enabled && !result.mycelium_peers.is_empty() {
             let peers_str = result.mycelium_peers.join(",");
-            state.vm_config.kernel.cmdline.push_str(&format!(" chvm.mycelium_peer={}", peers_str));
+            state
+                .vm_config
+                .kernel
+                .cmdline
+                .push_str(&format!(" chvm.mycelium_peer={}", peers_str));
         }
 
         Ok(())
@@ -621,14 +681,24 @@ impl VmManager {
         let vsock_path = state.vm_config.vsock_socket_path()?;
 
         for attempt in 0..MYCELIUM_PROBE_MAX_RETRIES {
-            let delay = if attempt == 0 { MYCELIUM_PROBE_INITIAL_DELAY } else { MYCELIUM_PROBE_RETRY_DELAY };
+            let delay = if attempt == 0 {
+                MYCELIUM_PROBE_INITIAL_DELAY
+            } else {
+                MYCELIUM_PROBE_RETRY_DELAY
+            };
             tokio::time::sleep(std::time::Duration::from_secs(delay)).await;
 
             let opts = ExecOptions {
                 cmd: vec![
-                    "ip".into(), "-6".into(), "-o".into(),
-                    "addr".into(), "show".into(), "dev".into(), "mycelium".into(),
-                    "scope".into(), "global".into(),
+                    "ip".into(),
+                    "-6".into(),
+                    "-o".into(),
+                    "addr".into(),
+                    "show".into(),
+                    "dev".into(),
+                    "mycelium".into(),
+                    "scope".into(),
+                    "global".into(),
                 ],
                 env: vec![],
                 working_dir: None,
@@ -651,7 +721,10 @@ impl VmManager {
                     }
                 }
                 _ => {
-                    debug!(attempt = attempt, "Mycelium IP probe attempt failed, retrying");
+                    debug!(
+                        attempt = attempt,
+                        "Mycelium IP probe attempt failed, retrying"
+                    );
                 }
             }
         }
@@ -669,11 +742,17 @@ impl VmManager {
 
         let teardown_config = network::TeardownConfig {
             vm_id: state.id.clone(),
-            ip_address: state.network_state.as_ref().and_then(|ns| ns.ip_address.clone()),
+            ip_address: state
+                .network_state
+                .as_ref()
+                .and_then(|ns| ns.ip_address.clone()),
             port_forwards: state.vm_config.network.port_forwards.clone(),
         };
 
-        backend.teardown(&teardown_config).await.map_err(|e| ChvmError::NetworkError(e.to_string()))
+        backend
+            .teardown(&teardown_config)
+            .await
+            .map_err(|e| ChvmError::NetworkError(e.to_string()))
     }
 
     async fn prepare_volume_mounts(&self, state: &mut RuntimeState, vm_dir: &Path) -> Result<()> {
@@ -714,9 +793,11 @@ impl VmManager {
         }
 
         if !mount_infos.is_empty() {
-            state.vm_config.kernel.cmdline.push_str(&format!(
-                " chvm.mounts={}", mount_infos.join(",")
-            ));
+            state
+                .vm_config
+                .kernel
+                .cmdline
+                .push_str(&format!(" chvm.mounts={}", mount_infos.join(",")));
         }
 
         Ok(())
@@ -738,13 +819,16 @@ impl VmManager {
 
 fn validate_rootfs(path: &Path) -> Result<()> {
     if !path.is_dir() {
-        return Err(ChvmError::InvalidRootfs(format!("not a directory: {}", path.display())));
+        return Err(ChvmError::InvalidRootfs(format!(
+            "not a directory: {}",
+            path.display()
+        )));
     }
     let essential = ["bin", "usr", "lib", "etc"];
     let found = essential.iter().any(|d| path.join(d).exists());
     if !found {
         return Err(ChvmError::InvalidRootfs(
-            "directory does not appear to be a valid rootfs (missing bin, usr, lib, or etc)".into()
+            "directory does not appear to be a valid rootfs (missing bin, usr, lib, or etc)".into(),
         ));
     }
     Ok(())

@@ -24,18 +24,22 @@ pub async fn pull_image(image_ref: &str, images_dir: &Path) -> anyhow::Result<Pu
     let normalized = crate::oci::registry::normalize_reference(image_ref);
     info!(image = %normalized, "Pulling image");
 
-    let reference: Reference = normalized.parse()
+    let reference: Reference = normalized
+        .parse()
         .map_err(|e| anyhow::anyhow!("invalid image reference: {e}"))?;
 
     let client_config = ClientConfig {
         protocol: ClientProtocol::Https,
         platform_resolver: Some(Box::new(|manifests| {
             // Select linux/amd64 platform
-            manifests.iter().find(|m| {
-                m.platform.as_ref().is_some_and(|p| {
-                    p.os == "linux" && p.architecture == "amd64"
+            manifests
+                .iter()
+                .find(|m| {
+                    m.platform
+                        .as_ref()
+                        .is_some_and(|p| p.os == "linux" && p.architecture == "amd64")
                 })
-            }).map(|m| m.digest.clone())
+                .map(|m| m.digest.clone())
         })),
         ..Default::default()
     };
@@ -44,7 +48,8 @@ pub async fn pull_image(image_ref: &str, images_dir: &Path) -> anyhow::Result<Pu
     let auth = RegistryAuth::Anonymous;
 
     // Use pull_manifest_and_config which handles ImageIndex resolution via platform_resolver
-    let (img_manifest, digest_str, config_str) = client.pull_manifest_and_config(&reference, &auth).await?;
+    let (img_manifest, digest_str, config_str) =
+        client.pull_manifest_and_config(&reference, &auth).await?;
 
     let safe_digest = sanitize_digest(&digest_str);
     let image_dir = images_dir.join(&safe_digest);
@@ -70,7 +75,11 @@ pub async fn pull_image(image_ref: &str, images_dir: &Path) -> anyhow::Result<Pu
             continue;
         }
 
-        info!(layer = i + 1, total = img_manifest.layers.len(), "Downloading layer");
+        info!(
+            layer = i + 1,
+            total = img_manifest.layers.len(),
+            "Downloading layer"
+        );
 
         // Stream layer directly to disk to avoid buffering large layers in memory
         let mut stream = client.pull_blob_stream(&reference, layer).await?;

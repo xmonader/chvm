@@ -103,11 +103,17 @@ impl std::str::FromStr for PortForward {
 
         let parts: Vec<&str> = ports.split(':').collect();
         if parts.len() != 2 {
-            return Err(format!("invalid port forward format: {s}, expected HOST:GUEST"));
+            return Err(format!(
+                "invalid port forward format: {s}, expected HOST:GUEST"
+            ));
         }
 
-        let host_port: u16 = parts[0].parse().map_err(|_| format!("invalid host port: {}", parts[0]))?;
-        let guest_port: u16 = parts[1].parse().map_err(|_| format!("invalid guest port: {}", parts[1]))?;
+        let host_port: u16 = parts[0]
+            .parse()
+            .map_err(|_| format!("invalid host port: {}", parts[0]))?;
+        let guest_port: u16 = parts[1]
+            .parse()
+            .map_err(|_| format!("invalid guest port: {}", parts[1]))?;
 
         Ok(PortForward {
             host_port,
@@ -165,7 +171,9 @@ impl std::str::FromStr for MountConfig {
         // Parse format: "/host/path:/guest/path" or "/host/path:/guest/path:ro"
         let parts: Vec<&str> = s.split(':').collect();
         if parts.len() < 2 {
-            return Err(format!("invalid volume format: {s}, expected SOURCE:TARGET[:ro]"));
+            return Err(format!(
+                "invalid volume format: {s}, expected SOURCE:TARGET[:ro]"
+            ));
         }
 
         let read_only = parts.len() > 2 && parts[2] == "ro";
@@ -300,6 +308,224 @@ mod tests {
         assert_eq!(VmState::Running.to_string(), "running");
         assert_eq!(VmState::Stopped.to_string(), "stopped");
         assert_eq!(VmState::Failed.to_string(), "failed");
+    }
+
+    // NetworkMode tests
+
+    #[test]
+    fn network_mode_from_str() {
+        assert_eq!("tap".parse::<NetworkMode>().unwrap(), NetworkMode::Tap);
+        assert_eq!(
+            "mycelium".parse::<NetworkMode>().unwrap(),
+            NetworkMode::Mycelium
+        );
+        assert_eq!("none".parse::<NetworkMode>().unwrap(), NetworkMode::None);
+    }
+
+    #[test]
+    fn network_mode_from_str_invalid() {
+        let result: Result<NetworkMode, _> = "invalid".parse();
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("unknown network mode"));
+    }
+
+    #[test]
+    fn network_mode_display() {
+        assert_eq!(NetworkMode::Tap.to_string(), "tap");
+        assert_eq!(NetworkMode::Mycelium.to_string(), "mycelium");
+        assert_eq!(NetworkMode::None.to_string(), "none");
+    }
+
+    #[test]
+    fn network_mode_default() {
+        let mode = NetworkMode::default();
+        assert_eq!(mode, NetworkMode::Tap);
+    }
+
+    // VmConfig tests
+
+    #[test]
+    fn vm_config_api_socket_path() {
+        let config = VmConfig {
+            id: "test-vm".to_string(),
+            name: "test".to_string(),
+            vcpu: 1,
+            memory_mb: 512,
+            kernel: KernelConfig {
+                path: "/kernel".to_string(),
+                cmdline: "console=ttyS0".to_string(),
+                initrd_path: None,
+            },
+            rootfs: RootfsConfig {
+                source: "/rootfs".to_string(),
+                rootfs_type: RootfsType::VirtioBlock,
+                read_only: false,
+            },
+            network: NetworkConfig {
+                mode: NetworkMode::Tap,
+                tap_device: None,
+                mac_address: None,
+                ip_address: None,
+                gateway: None,
+                port_forwards: vec![],
+                mycelium_peers: vec![],
+                mycelium_key: None,
+            },
+            init: InitConfig {
+                cmd: vec!["/bin/sh".to_string()],
+                env: vec![],
+                working_dir: None,
+            },
+            mounts: vec![],
+            log_path: None,
+            vsock_cid: 3,
+            state_dir: Some("/state/test-vm".to_string()),
+        };
+
+        assert_eq!(
+            config.api_socket_path(),
+            Some("/state/test-vm/api.sock".to_string())
+        );
+    }
+
+    #[test]
+    fn vm_config_vsock_socket_path() {
+        let config = VmConfig {
+            id: "test-vm".to_string(),
+            name: "test".to_string(),
+            vcpu: 1,
+            memory_mb: 512,
+            kernel: KernelConfig {
+                path: "/kernel".to_string(),
+                cmdline: "console=ttyS0".to_string(),
+                initrd_path: None,
+            },
+            rootfs: RootfsConfig {
+                source: "/rootfs".to_string(),
+                rootfs_type: RootfsType::VirtioBlock,
+                read_only: false,
+            },
+            network: NetworkConfig {
+                mode: NetworkMode::Tap,
+                tap_device: None,
+                mac_address: None,
+                ip_address: None,
+                gateway: None,
+                port_forwards: vec![],
+                mycelium_peers: vec![],
+                mycelium_key: None,
+            },
+            init: InitConfig {
+                cmd: vec!["/bin/sh".to_string()],
+                env: vec![],
+                working_dir: None,
+            },
+            mounts: vec![],
+            log_path: None,
+            vsock_cid: 3,
+            state_dir: Some("/state/test-vm".to_string()),
+        };
+
+        assert_eq!(
+            config.vsock_socket_path(),
+            Some("/state/test-vm/vsock.sock".to_string())
+        );
+    }
+
+    #[test]
+    fn vm_config_no_state_dir() {
+        let config = VmConfig {
+            id: "test-vm".to_string(),
+            name: "test".to_string(),
+            vcpu: 1,
+            memory_mb: 512,
+            kernel: KernelConfig {
+                path: "/kernel".to_string(),
+                cmdline: "console=ttyS0".to_string(),
+                initrd_path: None,
+            },
+            rootfs: RootfsConfig {
+                source: "/rootfs".to_string(),
+                rootfs_type: RootfsType::VirtioBlock,
+                read_only: false,
+            },
+            network: NetworkConfig {
+                mode: NetworkMode::Tap,
+                tap_device: None,
+                mac_address: None,
+                ip_address: None,
+                gateway: None,
+                port_forwards: vec![],
+                mycelium_peers: vec![],
+                mycelium_key: None,
+            },
+            init: InitConfig {
+                cmd: vec!["/bin/sh".to_string()],
+                env: vec![],
+                working_dir: None,
+            },
+            mounts: vec![],
+            log_path: None,
+            vsock_cid: 3,
+            state_dir: None,
+        };
+
+        assert_eq!(config.api_socket_path(), None);
+        assert_eq!(config.vsock_socket_path(), None);
+    }
+
+    // Serialization tests
+
+    #[test]
+    fn vm_state_serialization() {
+        let state = VmState::Running;
+        let json = serde_json::to_string(&state).unwrap();
+        assert_eq!(json, "\"running\"");
+
+        let deserialized: VmState = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized, VmState::Running);
+    }
+
+    #[test]
+    fn network_mode_serialization() {
+        let mode = NetworkMode::Mycelium;
+        let json = serde_json::to_string(&mode).unwrap();
+        assert_eq!(json, "\"mycelium\"");
+
+        let deserialized: NetworkMode = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized, NetworkMode::Mycelium);
+    }
+
+    #[test]
+    fn rootfs_type_serialization() {
+        let rt = RootfsType::VirtioFs;
+        let json = serde_json::to_string(&rt).unwrap();
+        assert_eq!(json, "\"virtiofs\"");
+
+        let deserialized: RootfsType = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized, RootfsType::VirtioFs);
+    }
+
+    #[test]
+    fn port_forward_serialization() {
+        let pf = PortForward {
+            host_port: 8080,
+            guest_port: 80,
+            protocol: "tcp".to_string(),
+        };
+
+        let json = serde_json::to_string(&pf).unwrap();
+        let deserialized: PortForward = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(deserialized.host_port, 8080);
+        assert_eq!(deserialized.guest_port, 80);
+        assert_eq!(deserialized.protocol, "tcp");
+    }
+
+    #[test]
+    fn default_protocol_is_tcp() {
+        let pf: PortForward = "8080:80".parse().unwrap();
+        assert_eq!(pf.protocol, "tcp");
     }
 }
 

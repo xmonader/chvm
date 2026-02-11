@@ -37,35 +37,87 @@ pub trait CommonVmArgs {
 }
 
 impl CommonVmArgs for crate::cli::RunArgs {
-    fn name(&self) -> Option<String> { self.name.clone() }
-    fn image(&self) -> &str { &self.image }
-    fn rootfs(&self) -> Option<String> { self.rootfs.clone() }
-    fn cpus(&self) -> u32 { self.cpus }
-    fn memory(&self) -> u32 { self.memory }
-    fn storage(&self) -> &str { &self.storage }
-    fn network(&self) -> &str { &self.network }
-    fn publish(&self) -> &[String] { &self.publish }
-    fn env(&self) -> &[String] { &self.env }
-    fn volume(&self) -> &[String] { &self.volume }
-    fn kernel(&self) -> Option<String> { self.kernel.clone() }
-    fn mycelium_peers(&self) -> &[String] { &self.mycelium_peers }
-    fn cmd(&self) -> &[String] { &self.cmd }
+    fn name(&self) -> Option<String> {
+        self.name.clone()
+    }
+    fn image(&self) -> &str {
+        &self.image
+    }
+    fn rootfs(&self) -> Option<String> {
+        self.rootfs.clone()
+    }
+    fn cpus(&self) -> u32 {
+        self.cpus
+    }
+    fn memory(&self) -> u32 {
+        self.memory
+    }
+    fn storage(&self) -> &str {
+        &self.storage
+    }
+    fn network(&self) -> &str {
+        &self.network
+    }
+    fn publish(&self) -> &[String] {
+        &self.publish
+    }
+    fn env(&self) -> &[String] {
+        &self.env
+    }
+    fn volume(&self) -> &[String] {
+        &self.volume
+    }
+    fn kernel(&self) -> Option<String> {
+        self.kernel.clone()
+    }
+    fn mycelium_peers(&self) -> &[String] {
+        &self.mycelium_peers
+    }
+    fn cmd(&self) -> &[String] {
+        &self.cmd
+    }
 }
 
 impl CommonVmArgs for crate::cli::CreateArgs {
-    fn name(&self) -> Option<String> { self.name.clone() }
-    fn image(&self) -> &str { &self.image }
-    fn rootfs(&self) -> Option<String> { self.rootfs.clone() }
-    fn cpus(&self) -> u32 { self.cpus }
-    fn memory(&self) -> u32 { self.memory }
-    fn storage(&self) -> &str { &self.storage }
-    fn network(&self) -> &str { &self.network }
-    fn publish(&self) -> &[String] { &self.publish }
-    fn env(&self) -> &[String] { &self.env }
-    fn volume(&self) -> &[String] { &self.volume }
-    fn kernel(&self) -> Option<String> { self.kernel.clone() }
-    fn mycelium_peers(&self) -> &[String] { &self.mycelium_peers }
-    fn cmd(&self) -> &[String] { &self.cmd }
+    fn name(&self) -> Option<String> {
+        self.name.clone()
+    }
+    fn image(&self) -> &str {
+        &self.image
+    }
+    fn rootfs(&self) -> Option<String> {
+        self.rootfs.clone()
+    }
+    fn cpus(&self) -> u32 {
+        self.cpus
+    }
+    fn memory(&self) -> u32 {
+        self.memory
+    }
+    fn storage(&self) -> &str {
+        &self.storage
+    }
+    fn network(&self) -> &str {
+        &self.network
+    }
+    fn publish(&self) -> &[String] {
+        &self.publish
+    }
+    fn env(&self) -> &[String] {
+        &self.env
+    }
+    fn volume(&self) -> &[String] {
+        &self.volume
+    }
+    fn kernel(&self) -> Option<String> {
+        self.kernel.clone()
+    }
+    fn mycelium_peers(&self) -> &[String] {
+        &self.mycelium_peers
+    }
+    fn cmd(&self) -> &[String] {
+        &self.cmd
+    }
 }
 
 /// Truncate a string to max length, adding "..." if truncated.
@@ -83,19 +135,27 @@ pub fn build_create_options(
     detach: bool,
     remove_after: bool,
 ) -> anyhow::Result<CreateOptions> {
-    let port_forwards: Vec<PortForward> = args.publish().iter()
+    let port_forwards: Vec<PortForward> = args
+        .publish()
+        .iter()
         .map(|p| p.parse())
         .collect::<std::result::Result<Vec<_>, _>>()
         .map_err(|e: String| anyhow::anyhow!(e))?;
 
-    let mounts: Vec<MountConfig> = args.volume().iter()
+    let mounts: Vec<MountConfig> = args
+        .volume()
+        .iter()
         .map(|v| v.parse())
         .collect::<std::result::Result<Vec<_>, _>>()
         .map_err(|e: String| anyhow::anyhow!(e))?;
 
     Ok(CreateOptions {
         name: args.name(),
-        image_ref: if args.rootfs().is_some() { None } else { Some(args.image().to_string()) },
+        image_ref: if args.rootfs().is_some() {
+            None
+        } else {
+            Some(args.image().to_string())
+        },
         rootfs_path: args.rootfs(),
         vcpu: Some(args.cpus()),
         memory_mb: Some(args.memory()),

@@ -63,7 +63,9 @@ impl ImageCache {
             return Ok(cloned);
         }
 
-        let total_size: u64 = result.layer_paths.iter()
+        let total_size: u64 = result
+            .layer_paths
+            .iter()
             .filter_map(|p| std::fs::metadata(p).ok())
             .map(|m| m.len())
             .sum();
@@ -77,7 +79,9 @@ impl ImageCache {
             layer_paths: result.layer_paths.clone(),
             rootfs_path: None,
             config: result.config.clone(),
-            labels: result.config.as_ref()
+            labels: result
+                .config
+                .as_ref()
                 .map(|c| c.labels.clone())
                 .unwrap_or_default(),
         };
@@ -124,7 +128,10 @@ impl ImageCache {
         }
 
         // Try by reference
-        let to_remove: Option<String> = self.index.images.iter()
+        let to_remove: Option<String> = self
+            .index
+            .images
+            .iter()
             .find(|(_, img)| img.refs.iter().any(|r| r == reference))
             .map(|(k, _)| k.clone());
 

@@ -14,17 +14,24 @@ async fn connect_vsock(socket_path: &str, port: u32) -> Result<UnixStream> {
 
     // Send CONNECT command
     let connect_cmd = format!("CONNECT {port}\n");
-    stream.write_all(connect_cmd.as_bytes()).await
+    stream
+        .write_all(connect_cmd.as_bytes())
+        .await
         .map_err(|e| ChvmError::VsockError(format!("failed to send CONNECT: {e}")))?;
 
     // Read OK response
     let mut buf = vec![0u8; 256];
-    let n = stream.read(&mut buf).await
+    let n = stream
+        .read(&mut buf)
+        .await
         .map_err(|e| ChvmError::VsockError(format!("failed to read CONNECT response: {e}")))?;
 
     let resp = String::from_utf8_lossy(&buf[..n]);
     if !resp.starts_with("OK") {
-        return Err(ChvmError::VsockError(format!("vsock CONNECT failed: {}", resp.trim())));
+        return Err(ChvmError::VsockError(format!(
+            "vsock CONNECT failed: {}",
+            resp.trim()
+        )));
     }
 
     Ok(stream)
@@ -52,7 +59,9 @@ async fn exec_inner(
 
     let mut req_bytes = serde_json::to_vec(&req)?;
     req_bytes.push(b'\n');
-    stream.write_all(&req_bytes).await
+    stream
+        .write_all(&req_bytes)
+        .await
         .map_err(|e| ChvmError::VsockError(format!("failed to send request: {e}")))?;
 
     let reader = tokio::io::BufReader::new(stream);
@@ -80,23 +89,23 @@ async fn exec_inner(
                     }
                     return Ok((resp.exit_code, captured));
                 }
-                Err(_) => {
-                    match mode {
-                        OutputMode::Print => print!("{line}"),
-                        OutputMode::Capture => {
-                            if !captured.is_empty() {
-                                captured.push('\n');
-                            }
-                            captured.push_str(&line);
+                Err(_) => match mode {
+                    OutputMode::Print => print!("{line}"),
+                    OutputMode::Capture => {
+                        if !captured.is_empty() {
+                            captured.push('\n');
                         }
+                        captured.push_str(&line);
                     }
-                }
+                },
             }
         }
     }
 
     // Stream ended without receiving an ExecResponse — connection dropped or guest crashed
-    Err(ChvmError::VsockError("connection closed without receiving exit status (guest may have crashed)".into()))
+    Err(ChvmError::VsockError(
+        "connection closed without receiving exit status (guest may have crashed)".into(),
+    ))
 }
 
 /// Execute a command in a running VM and print output.
@@ -142,11 +151,11 @@ impl Drop for RawModeGuard {
 }
 
 /// Open an interactive shell session to a running VM.
-/// Detach with Ctrl+P, Ctrl+Q (same as Docker).
+/// Detach with Ctrl+P, Ctrl+Q (same as Docker). Use a regular terminal, not IDE terminal.
 pub async fn interactive_session(vsock_path: &str) -> Result<i32> {
     let stream = connect_vsock(vsock_path, VSOCK_PORT_SHELL).await?;
 
-    eprintln!("Attached. Detach with Ctrl+P, Ctrl+Q.");
+    eprintln!("Attached. Detach with Ctrl+P, Ctrl+Q (use regular terminal, not IDE).");
 
     // Set terminal to raw mode so keystrokes are passed through unprocessed
     let _raw_guard = RawModeGuard::enable();

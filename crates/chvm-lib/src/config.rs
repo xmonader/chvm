@@ -36,11 +36,21 @@ pub struct Config {
 fn default_base_dir() -> PathBuf {
     Paths::resolve().base
 }
-fn default_vcpu() -> u32 { 1 }
-fn default_memory_mb() -> u32 { 512 }
-fn default_network_mode() -> String { "tap".into() }
-fn default_storage_backend() -> String { "block".into() }
-fn default_bridge() -> String { "chvm0".into() }
+fn default_vcpu() -> u32 {
+    1
+}
+fn default_memory_mb() -> u32 {
+    512
+}
+fn default_network_mode() -> String {
+    "tap".into()
+}
+fn default_storage_backend() -> String {
+    "block".into()
+}
+fn default_bridge() -> String {
+    "chvm0".into()
+}
 
 impl Default for Config {
     fn default() -> Self {
@@ -77,5 +87,91 @@ impl Config {
 
     pub fn paths(&self) -> Paths {
         Paths::new(self.base_dir.clone())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::TempDir;
+
+    #[test]
+    fn test_default_config() {
+        let config = Config::default();
+        assert_eq!(config.default_vcpu, 1);
+        assert_eq!(config.default_memory_mb, 512);
+        assert_eq!(config.default_network_mode, "tap");
+        assert_eq!(config.default_storage_backend, "block");
+        assert_eq!(config.default_bridge, "chvm0");
+        assert!(config.kernel_path.is_none());
+        assert!(config.virtiofsd_bin.is_none());
+        assert!(config.cloud_hypervisor_bin.is_none());
+    }
+
+    #[test]
+    fn test_load_nonexistent_returns_default() {
+        let temp_dir = TempDir::new().unwrap();
+        let config_path = temp_dir.path().join("nonexistent.json");
+
+        let config = Config::load(&config_path).unwrap();
+        assert_eq!(config.default_vcpu, 1);
+        assert_eq!(config.default_memory_mb, 512);
+    }
+
+    #[test]
+    fn test_save_and_load() {
+        let temp_dir = TempDir::new().unwrap();
+        let config_path = temp_dir.path().join("config.json");
+
+        let mut config = Config::default();
+        config.default_vcpu = 4;
+        config.default_memory_mb = 2048;
+        config.kernel_path = Some("/custom/kernel".to_string());
+        config.default_bridge = "mybr0".to_string();
+
+        config.save(&config_path).unwrap();
+        assert!(config_path.exists());
+
+        let loaded = Config::load(&config_path).unwrap();
+        assert_eq!(loaded.default_vcpu, 4);
+        assert_eq!(loaded.default_memory_mb, 2048);
+        assert_eq!(loaded.kernel_path, Some("/custom/kernel".to_string()));
+        assert_eq!(loaded.default_bridge, "mybr0");
+    }
+
+    #[test]
+    fn test_config_serialization() {
+        let config = Config {
+            base_dir: PathBuf::from("/test/base"),
+            default_vcpu: 2,
+            default_memory_mb: 1024,
+            kernel_path: Some("/test/kernel".to_string()),
+            virtiofsd_bin: Some("/usr/bin/virtiofsd".to_string()),
+            cloud_hypervisor_bin: None,
+            default_network_mode: "mycelium".to_string(),
+            default_storage_backend: "virtiofs".to_string(),
+            default_bridge: "testbr0".to_string(),
+        };
+
+        let json = serde_json::to_string(&config).unwrap();
+        let deserialized: Config = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(deserialized.default_vcpu, 2);
+        assert_eq!(deserialized.default_memory_mb, 1024);
+        assert_eq!(deserialized.default_network_mode, "mycelium");
+    }
+
+    #[test]
+    fn test_paths_from_config() {
+        let config = Config {
+            base_dir: PathBuf::from("/custom/chvm"),
+            ..Config::default()
+        };
+
+        let paths = config.paths();
+        assert_eq!(paths.base, PathBuf::from("/custom/chvm"));
+        assert_eq!(paths.images, PathBuf::from("/custom/chvm/images"));
+        assert_eq!(paths.vms, PathBuf::from("/custom/chvm/vms"));
+        assert_eq!(paths.kernels, PathBuf::from("/custom/chvm/kernels"));
     }
 }

@@ -12,7 +12,9 @@ pub fn execute(_args: &DoctorArgs) -> anyhow::Result<()> {
     print!("Cloud Hypervisor: ");
     match find_ch_binary() {
         Some(path) => {
-            let version = Command::new(&path).arg("--version").output()
+            let version = Command::new(&path)
+                .arg("--version")
+                .output()
                 .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
                 .unwrap_or_else(|_| "unknown version".into());
             println!("OK ({path}) - {version}");
@@ -32,9 +34,9 @@ pub fn execute(_args: &DoctorArgs) -> anyhow::Result<()> {
         "/usr/lib/virtiofsd",
         "/usr/local/bin/virtiofsd",
     ];
-    let found = virtiofsd_paths.iter().any(|p| {
-        which::which(p).is_ok() || std::path::Path::new(p).exists()
-    });
+    let found = virtiofsd_paths
+        .iter()
+        .any(|p| which::which(p).is_ok() || std::path::Path::new(p).exists());
     if found {
         println!("OK");
     } else {
@@ -55,7 +57,10 @@ pub fn execute(_args: &DoctorArgs) -> anyhow::Result<()> {
             .map(|e| e.count())
             .unwrap_or(0);
         if kernel_count > 0 {
-            println!("WARN - No default kernel symlink, but {} kernels found", kernel_count);
+            println!(
+                "WARN - No default kernel symlink, but {} kernels found",
+                kernel_count
+            );
         } else {
             println!("NOT FOUND");
             println!("  Run: chvm kernel extract-host");

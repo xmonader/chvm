@@ -103,7 +103,92 @@ mod tests {
         assert!(cmdline.starts_with("chvm.cmd="));
         // Decode and verify
         let encoded = cmdline.strip_prefix("chvm.cmd=").unwrap();
-        let decoded = base64::engine::general_purpose::STANDARD.decode(encoded).unwrap();
+        let decoded = base64::engine::general_purpose::STANDARD
+            .decode(encoded)
+            .unwrap();
         assert_eq!(String::from_utf8(decoded).unwrap(), "echo\0hello");
+    }
+
+    #[test]
+    fn test_env_encoding() {
+        let cmdline = KernelCmdlineBuilder::new()
+            .env(&["VAR1=value1".into(), "VAR2=value2".into()])
+            .build();
+        assert!(cmdline.starts_with("chvm.env="));
+        let encoded = cmdline.strip_prefix("chvm.env=").unwrap();
+        let decoded = base64::engine::general_purpose::STANDARD
+            .decode(encoded)
+            .unwrap();
+        assert_eq!(
+            String::from_utf8(decoded).unwrap(),
+            "VAR1=value1\0VAR2=value2"
+        );
+    }
+
+    #[test]
+    fn test_workdir() {
+        let cmdline = KernelCmdlineBuilder::new().workdir("/app").build();
+        assert_eq!(cmdline, "chvm.workdir=/app");
+    }
+
+    #[test]
+    fn test_workdir_empty() {
+        let cmdline = KernelCmdlineBuilder::new().workdir("").build();
+        assert_eq!(cmdline, "");
+    }
+
+    #[test]
+    fn test_raw_parameter() {
+        let cmdline = KernelCmdlineBuilder::new()
+            .raw("custom.param=value")
+            .build();
+        assert_eq!(cmdline, "custom.param=value");
+    }
+
+    #[test]
+    fn test_rw_false() {
+        let cmdline = KernelCmdlineBuilder::new().rw(false).build();
+        assert_eq!(cmdline, "ro");
+    }
+
+    #[test]
+    fn test_combined_cmdline() {
+        let cmdline = KernelCmdlineBuilder::new()
+            .console("hvc0")
+            .root("/dev/vda")
+            .rw(true)
+            .init("/chvm-init")
+            .cmd(&["/bin/sh".into()])
+            .env(&["PATH=/usr/bin".into()])
+            .workdir("/app")
+            .raw("quiet")
+            .build();
+
+        assert!(cmdline.contains("console=hvc0"));
+        assert!(cmdline.contains("root=/dev/vda"));
+        assert!(cmdline.contains("rw"));
+        assert!(cmdline.contains("init=/chvm-init"));
+        assert!(cmdline.contains("chvm.cmd="));
+        assert!(cmdline.contains("chvm.env="));
+        assert!(cmdline.contains("chvm.workdir=/app"));
+        assert!(cmdline.contains("quiet"));
+    }
+
+    #[test]
+    fn test_empty_cmd() {
+        let cmdline = KernelCmdlineBuilder::new().cmd(&[]).build();
+        assert_eq!(cmdline, "");
+    }
+
+    #[test]
+    fn test_empty_env() {
+        let cmdline = KernelCmdlineBuilder::new().env(&[]).build();
+        assert_eq!(cmdline, "");
+    }
+
+    #[test]
+    fn test_default_builder() {
+        let builder = KernelCmdlineBuilder::default();
+        assert_eq!(builder.build(), "");
     }
 }

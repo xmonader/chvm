@@ -24,8 +24,8 @@ const KERNEL_MODULES: &[&str] = &[
 /// Supported compressed module suffixes and their decompressor commands.
 const COMPRESSION_FORMATS: &[(&str, &str, &[&str])] = &[
     (".zst", "zstd", &["-d", "-f", "-o"]),
-    (".xz",  "xz",   &["-d", "-k", "-f"]),
-    (".gz",  "gzip",  &["-d", "-k", "-f"]),
+    (".xz", "xz", &["-d", "-k", "-f"]),
+    (".gz", "gzip", &["-d", "-k", "-f"]),
 ];
 
 /// RAII guard that unmounts a mount point on drop.
@@ -63,7 +63,10 @@ pub fn create_ext4_image(
         .arg(image_path)
         .output()?;
     if !output.status.success() {
-        anyhow::bail!("mkfs.ext4 failed: {}", String::from_utf8_lossy(&output.stderr));
+        anyhow::bail!(
+            "mkfs.ext4 failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
     }
 
     // Mount and copy rootfs
@@ -84,7 +87,9 @@ pub fn create_ext4_image(
     }
 
     // RAII guard ensures umount + cleanup even on panic/early return
-    let _guard = MountGuard { mount_point: mount_point.clone() };
+    let _guard = MountGuard {
+        mount_point: mount_point.clone(),
+    };
 
     // Copy rootfs contents (cp -a preserves permissions/symlinks/devices)
     let cp_result = Command::new("cp")
@@ -149,11 +154,10 @@ pub(crate) fn inject_binary(
     home_suffix: Option<&str>,
 ) {
     // Build list of candidate paths including home dir variants
-    let home_path = home_suffix.and_then(|suffix| {
-        invoking_user_home().map(|h| h.join(suffix))
-    });
+    let home_path = home_suffix.and_then(|suffix| invoking_user_home().map(|h| h.join(suffix)));
 
-    let candidates: Vec<&Path> = search_paths.iter()
+    let candidates: Vec<&Path> = search_paths
+        .iter()
         .map(Path::new)
         .chain(home_path.as_deref())
         .collect();
@@ -182,7 +186,8 @@ pub(crate) fn inject_binary(
 
 fn inject_kernel_modules(mount_point: &Path) {
     let uname = Command::new("uname").arg("-r").output().ok();
-    let version = uname.map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+    let version = uname
+        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
         .unwrap_or_default();
 
     if version.is_empty() {
