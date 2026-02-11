@@ -142,8 +142,11 @@ impl Drop for RawModeGuard {
 }
 
 /// Open an interactive shell session to a running VM.
+/// Detach with Ctrl+P, Ctrl+Q (same as Docker).
 pub async fn interactive_session(vsock_path: &str) -> Result<i32> {
     let stream = connect_vsock(vsock_path, VSOCK_PORT_SHELL).await?;
+
+    eprintln!("Attached. Detach with Ctrl+P, Ctrl+Q.");
 
     // Set terminal to raw mode so keystrokes are passed through unprocessed
     let _raw_guard = RawModeGuard::enable();
@@ -171,12 +174,39 @@ pub async fn interactive_session(vsock_path: &str) -> Result<i32> {
     let stdin_handle = tokio::spawn(async move {
         let mut buf = vec![0u8; 4096];
         let mut stdin = tokio::io::stdin();
+        let mut saw_ctrl_p = false;
         loop {
             match stdin.read(&mut buf).await {
                 Ok(0) => break,
                 Ok(n) => {
-                    if writer.write_all(&buf[..n]).await.is_err() {
-                        break;
+                    // Check for Ctrl+P (0x10), Ctrl+Q (0x11) escape sequence
+                    let mut i = 0;
+                    while i < n {
+                        if saw_ctrl_p {
+                            if buf[i] == 0x11 {
+                                // Ctrl+P, Ctrl+Q — detach
+                                return;
+                            }
+                            // False alarm: send the buffered Ctrl+P, then this byte
+                            let _ = writer.write_all(&[0x10]).await;
+                            saw_ctrl_p = false;
+                        }
+
+                        if buf[i] == 0x10 {
+                            // Ctrl+P — buffer it, wait for next byte
+                            saw_ctrl_p = true;
+                            i += 1;
+                            continue;
+                        }
+
+                        // Find the next Ctrl+P in the remaining buffer, or send everything
+                        let start = i;
+                        while i < n && buf[i] != 0x10 {
+                            i += 1;
+                        }
+                        if writer.write_all(&buf[start..i]).await.is_err() {
+                            return;
+                        }
                     }
                 }
                 Err(_) => break,
