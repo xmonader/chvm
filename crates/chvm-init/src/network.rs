@@ -3,8 +3,8 @@ use std::process::Command;
 pub fn setup_network() -> Result<(), Box<dyn std::error::Error>> {
     let ip_cmd = crate::helpers::find_binary("ip", &["/sbin/ip", "/chvm-bin/ip"]);
 
-    // Bring up loopback
-    run_ip(&ip_cmd, &["link", "set", "lo", "up"]);
+    // Bring up loopback — use ioctl directly so it works even without iproute2
+    bring_up_loopback();
 
     let cmdline = std::fs::read_to_string("/proc/cmdline").unwrap_or_default();
     let mut ip_addr = None;
@@ -28,7 +28,8 @@ pub fn setup_network() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
 
-    // Bring up eth0
+    // Bring up eth0 — try ioctl first, fall back to ip command
+    bring_up_interface("eth0");
     run_ip(&ip_cmd, &["link", "set", "eth0", "up"]);
 
     if let Some(ref addr) = ip_addr {
@@ -69,6 +70,38 @@ fn run_ip(ip_cmd: &Option<String>, args: &[&str]) {
     if let Some(ref ip) = ip_cmd {
         let _ = Command::new(ip).args(args).output();
     }
+}
+
+/// Bring up a network interface using ioctl, no external binaries needed.
+fn bring_up_interface(name: &str) {
+    unsafe {
+        let sock = libc::socket(libc::AF_INET, libc::SOCK_DGRAM, 0);
+        if sock < 0 {
+            return;
+        }
+
+        let mut ifr: libc::ifreq = std::mem::zeroed();
+        let name_bytes = name.as_bytes();
+        let copy_len = name_bytes.len().min(libc::IFNAMSIZ - 1);
+        std::ptr::copy_nonoverlapping(
+            name_bytes.as_ptr(),
+            ifr.ifr_name.as_mut_ptr() as *mut u8,
+            copy_len,
+        );
+
+        // Get current flags
+        if libc::ioctl(sock, libc::SIOCGIFFLAGS as _, &mut ifr) == 0 {
+            // Set IFF_UP
+            ifr.ifr_ifru.ifru_flags |= libc::IFF_UP as i16;
+            libc::ioctl(sock, libc::SIOCSIFFLAGS as _, &ifr);
+        }
+
+        libc::close(sock);
+    }
+}
+
+fn bring_up_loopback() {
+    bring_up_interface("lo");
 }
 
 fn setup_dns() {
