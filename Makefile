@@ -1,6 +1,7 @@
 MUSL_TARGET := x86_64-unknown-linux-musl
 
-.PHONY: build build-debug release test unit-test integration-test check fmt fmt-check clippy clean install doctor prune init
+.PHONY: build build-debug release test unit-test integration-test check fmt fmt-check clippy clean install doctor prune init \
+       docker-build docker-build-alpine docker-build-ubuntu docker-build-nginx docker-build-redis
 
 # Default target
 all: build
@@ -48,9 +49,11 @@ fmt-check:
 clippy:
 	cargo clippy --workspace -- -D warnings
 
-# Install binary to ~/.cargo/bin
-install:
+# Install binaries to ~/.cargo/bin and ~/.chvm/bin
+install: init
 	cargo install --path crates/chvm-cli
+	mkdir -p ~/.chvm/bin
+	cp target/$(MUSL_TARGET)/release/chvm-init ~/.chvm/bin/chvm-init
 
 # Run chvm doctor
 doctor: build
@@ -63,3 +66,23 @@ prune: build
 # Clean build artifacts
 clean:
 	cargo clean
+
+# --- Docker example images ---
+
+DOCKER_DIR := dockers
+
+# Build all example Docker images
+docker-build: docker-build-alpine docker-build-ubuntu docker-build-nginx docker-build-redis
+
+# Build individual images
+docker-build-alpine:
+	docker build -t localhost/chvm-alpine-hello:latest $(DOCKER_DIR)/alpine-hello
+
+docker-build-ubuntu:
+	docker build -t localhost/chvm-ubuntu-dev:latest $(DOCKER_DIR)/ubuntu-dev
+
+docker-build-nginx:
+	docker build -t localhost/chvm-nginx-web:latest $(DOCKER_DIR)/nginx-web
+
+docker-build-redis:
+	docker build -t localhost/chvm-redis-cache:latest $(DOCKER_DIR)/redis-cache

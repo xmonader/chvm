@@ -1,0 +1,26 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>chvm microVM</title>
+    <style>
+        body { font-family: monospace; max-width: 600px; margin: 40px auto; padding: 0 20px; background: #1a1a2e; color: #e0e0e0; }
+        h1 { color: #00d4aa; }
+        .info { background: #16213e; padding: 15px; border-radius: 5px; margin: 10px 0; }
+        code { color: #ff6b6b; }
+    </style>
+</head>
+<body>
+    <h1>Hello from chvm!</h1>
+    <div class="info">
+        <p>This page is served by <strong>nginx</strong> running inside a <strong>chvm microVM</strong>.</p>
+        <p>Each VM boots its own Linux kernel with full hardware isolation via KVM.</p>
+    </div>
+    <h2>Quick Commands</h2>
+    <div class="info">
+        <p><code>sudo chvm run -d -p 8080:80 --name web localhost/chvm-nginx-web</code></p>
+        <p><code>curl http://localhost:8080/</code></p>
+        <p><code>curl http://localhost:8080/health</code></p>
+        <p><code>sudo chvm rm -f web</code></p>
+    </div>
+</body>
+</html>

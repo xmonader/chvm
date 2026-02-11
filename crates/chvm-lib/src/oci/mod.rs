@@ -1,4 +1,5 @@
 pub mod cache;
+pub mod docker_import;
 pub mod image_config;
 pub mod layer;
 pub mod pull;

@@ -260,6 +260,57 @@ chvm stores its data in `~/.chvm/` (configurable via `CHVM_HOME`):
 }
 ```
 
+## Examples
+
+### Web Server Over Mycelium
+
+Run nginx in a VM and access it from anywhere on the mycelium network — no port forwarding needed:
+
+```bash
+# Start nginx with mycelium networking
+sudo chvm run -d --name web --network mycelium \
+  --mycelium-peers tcp://188.40.132.242:9651 \
+  --mycelium-peers tcp://136.243.47.186:9651 \
+  alpine:latest -- sh -c "\
+    apk add --no-cache nginx && mkdir -p /var/www /run/nginx && \
+    echo 'hello from chvm' > /var/www/index.html && \
+    printf 'server { listen 80; listen [::]:80; root /var/www; }\n' \
+      > /etc/nginx/http.d/default.conf && \
+    nginx -g 'daemon off;'"
+
+# Get the mycelium IPv6 address
+WEB_IP=$(sudo chvm inspect web | jq -r '.network_state.mycelium_ip')
+
+# Access from another VM on the mycelium network
+sudo chvm run --rm --network mycelium \
+  --mycelium-peers tcp://188.40.132.242:9651 \
+  alpine:latest -- sh -c "apk add --no-cache curl && curl -s http://[$WEB_IP]/"
+# Output: hello from chvm
+```
+
+### Isolated Build Environment
+
+Mount source code into a VM for sandboxed compilation:
+
+```bash
+sudo chvm run --rm --cpus 2 --memory 1024 \
+  -v /home/user/project:/src:ro \
+  -v /tmp/output:/out \
+  alpine:latest -- sh -c "\
+    apk add --no-cache gcc musl-dev make && \
+    cd /src && make && cp build/app /out/"
+```
+
+### Disposable Shell
+
+Run untrusted code in a VM that auto-cleans on exit:
+
+```bash
+sudo chvm run --rm alpine:latest -- sh -c "wget -qO- https://example.com/script.sh | sh"
+```
+
+See [docs/user-guide.md](docs/user-guide.md) for more examples.
+
 ## Architecture
 
 chvm is structured as a Rust workspace with three crates:

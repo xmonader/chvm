@@ -176,10 +176,25 @@ impl VmManager {
     /// Pull an OCI image into the cache.
     pub async fn pull(&mut self, image_ref: &str) -> Result<oci::CachedImage> {
         info!(image = image_ref, "Pulling image");
-        let result = oci::pull::pull_image(image_ref, &self.paths.images).await
-            .map_err(|e| ChvmError::OciError(e.to_string()))?;
-        let cached = self.image_cache.add(&result)?;
-        Ok(cached)
+
+        // Try registry pull first
+        match oci::pull::pull_image(image_ref, &self.paths.images).await {
+            Ok(result) => {
+                let cached = self.image_cache.add(&result)?;
+                return Ok(cached);
+            }
+            Err(registry_err) => {
+                // Registry pull failed — try local container runtimes (docker, podman)
+                if let Some(runtime) = oci::docker_import::find_local_runtime(image_ref) {
+                    info!(image = image_ref, runtime = runtime, "Registry pull failed, importing from local {runtime}");
+                    let result = oci::docker_import::import_from_local(runtime, image_ref, &self.paths.images)
+                        .map_err(|e| ChvmError::OciError(format!("{runtime} import failed: {e}")))?;
+                    let cached = self.image_cache.add(&result)?;
+                    return Ok(cached);
+                }
+                return Err(ChvmError::OciError(registry_err.to_string()));
+            }
+        }
     }
 
     /// Create a new VM.

@@ -676,3 +676,124 @@ sudo chvm setup network
 **Module decompression is best-effort.** When injecting kernel modules, compressed `.ko.zst`, `.ko.xz`, and `.ko.gz` variants are decompressed using host tools (`zstd`, `xz`, `gzip`). If these tools are missing, the compressed modules are silently skipped. Run `chvm doctor` to check for missing tools.
 
 **No `depmod` is run.** Injected modules are copied flat into `/lib/modules/` without running `depmod` to build dependency metadata. The guest init loads modules in a hardcoded dependency order, which works for the specific vsock/virtiofs modules but may not generalize to other module sets.
+
+---
+
+## Real-World Examples
+
+### Web Server Accessible Over Mycelium
+
+Run an nginx web server in a VM and access it from any other mycelium node — no port forwarding or firewall rules needed:
+
+```bash
+# Start a VM with mycelium networking
+sudo chvm run -d --name web --network mycelium \
+  --mycelium-peers tcp://188.40.132.242:9651 \
+  --mycelium-peers tcp://136.243.47.186:9651 \
+  alpine:latest -- sh -c "\
+    apk add --no-cache nginx && \
+    mkdir -p /var/www /run/nginx && \
+    echo 'hello from chvm' > /var/www/index.html && \
+    cat > /etc/nginx/http.d/default.conf << 'EOF'
+server {
+    listen 80;
+    listen [::]:80;
+    root /var/www;
+    index index.html;
+    location / { try_files \$uri \$uri/ =404; }
+}
+EOF
+    nginx -g 'daemon off;'"
+
+# Get the VM's mycelium IPv6 address
+WEB_IP=$(sudo chvm inspect web | jq -r '.network_state.mycelium_ip')
+echo "Web server at: http://[$WEB_IP]/"
+
+# Access it from another VM on the same mycelium network
+sudo chvm run --rm --network mycelium \
+  --mycelium-peers tcp://188.40.132.242:9651 \
+  --mycelium-peers tcp://136.243.47.186:9651 \
+  alpine:latest -- sh -c "apk add --no-cache curl && curl -s http://[$WEB_IP]/"
+# Output: hello from chvm
+```
+
+Any machine running mycelium (not just chvm VMs) can reach this server using the IPv6 address — across networks, without DNS or public IPs.
+
+### Dev Environment with Mounted Source Code
+
+Mount your source code into a VM for isolated builds:
+
+```bash
+# Build inside a VM with your code mounted read-only
+sudo chvm run --rm \
+  -v /home/user/myproject:/src:ro \
+  -v /tmp/build-output:/out \
+  alpine:latest -- sh -c "\
+    apk add --no-cache gcc musl-dev make && \
+    cd /src && make && cp build/myapp /out/"
+
+# Output is on the host at /tmp/build-output/myapp
+ls -la /tmp/build-output/myapp
+```
+
+### Multi-Service Setup with Mycelium
+
+Run multiple services that discover each other via mycelium IPv6 — no port mapping or service mesh required:
+
+```bash
+PEERS="--mycelium-peers tcp://188.40.132.242:9651 --mycelium-peers tcp://136.243.47.186:9651"
+
+# Start a Redis-like key-value store
+sudo chvm run -d --name kv --network mycelium $PEERS \
+  alpine:latest -- sh -c "apk add --no-cache redis && redis-server --bind :: --protected-mode no"
+
+# Start an app server that connects to the KV store
+KV_IP=$(sudo chvm inspect kv | jq -r '.network_state.mycelium_ip')
+sudo chvm run -d --name app --network mycelium $PEERS \
+  -e REDIS_HOST="$KV_IP" \
+  alpine:latest -- sh -c "\
+    apk add --no-cache redis && \
+    redis-cli -h $KV_IP SET greeting 'hello from chvm' && \
+    redis-cli -h $KV_IP GET greeting"
+
+# Check the logs
+sudo chvm logs app
+```
+
+### Isolated Testing with Port Forwarding
+
+Run a service in an isolated VM but expose it on the host for local development:
+
+```bash
+# Run a Python HTTP server, forward host:8080 -> VM:8000
+sudo chvm run -d --name devserver \
+  -p 8080:8000 \
+  -v /home/user/site:/srv:ro \
+  alpine:latest -- sh -c "\
+    apk add --no-cache python3 && \
+    cd /srv && python3 -m http.server 8000"
+
+# Access from host browser
+curl http://localhost:8080/
+
+# Clean up
+sudo chvm rm -f devserver
+```
+
+### Disposable Shell for Untrusted Commands
+
+Use `--rm` to run one-off commands in a fully isolated VM that cleans up after itself:
+
+```bash
+# Run an untrusted script in an isolated VM
+sudo chvm run --rm alpine:latest -- sh -c "\
+    wget -qO- https://example.com/script.sh | sh"
+
+# Compile and test something without polluting the host
+sudo chvm run --rm --cpus 2 --memory 1024 \
+  alpine:latest -- sh -c "\
+    apk add --no-cache gcc musl-dev && \
+    echo '#include <stdio.h>
+    int main() { printf(\"hello from VM\\n\"); return 0; }' > test.c && \
+    gcc -o test test.c && ./test"
+```
