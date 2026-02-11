@@ -15,6 +15,7 @@ An in-memory `HashMap<String, RuntimeState>` that maps VM IDs to their current s
 ### VM Identification
 
 VMs are identified by:
+
 - **ID**: First 12 characters of a UUID v4 (e.g., `a1b2c3d4e5f6`)
 - **Name**: User-provided or defaults to the ID
 
@@ -22,16 +23,16 @@ Both `chvm stop myvm` (by name) and `chvm stop a1b2c3d4e5f6` (by ID) work. The m
 
 ### Lifecycle Operations
 
-| Method | Description |
-|--------|-------------|
-| `create()` | Resolve image, build config, persist state as Created |
-| `start()` | Prepare storage, setup network, launch CH, update to Running |
-| `stop()` | API shutdown, wait/kill, teardown network+storage, update to Stopped |
-| `remove()` | Stop if force, delete VM directory and state |
-| `list()` | Return all states, optionally filtered by running |
-| `prune()` | Remove all Stopped VMs |
-| `exec()` | Connect to vsock port 1024, send ExecRequest, stream output |
-| `attach()` | Connect to vsock port 1025, bidirectional terminal proxy |
+| Method     | Description                                                          |
+| ---------- | -------------------------------------------------------------------- |
+| `create()` | Resolve image, build config, persist state as Created                |
+| `start()`  | Prepare storage, setup network, launch CH, update to Running         |
+| `stop()`   | API shutdown, wait/kill, teardown network+storage, update to Stopped |
+| `remove()` | Stop if force, delete VM directory and state                         |
+| `list()`   | Return all states, optionally filtered by running                    |
+| `prune()`  | Remove all Stopped VMs                                               |
+| `exec()`   | Connect to vsock port 1024, send ExecRequest, stream output          |
+| `attach()` | Connect to vsock port 1025, bidirectional terminal proxy             |
 
 ---
 
@@ -47,15 +48,15 @@ CLI arguments > OCI image config > Global defaults
 
 ### Configuration Merge Rules
 
-| Field | CLI | Image Config | Default |
-|-------|-----|--------------|---------|
-| Command | `cmd` args | Entrypoint + Cmd | `/bin/sh` |
-| Env vars | `-e KEY=VAL` | Config.Env | PATH, HOME, TERM |
-| Working dir | (from image) | Config.WorkingDir | `/` |
-| vCPUs | `--cpus` | | `config.default_vcpu` (1) |
-| Memory | `--memory` | | `config.default_memory_mb` (512) |
-| Network | `--network` | | `config.default_network_mode` (tap) |
-| Storage | `--storage` | | `config.default_storage_backend` (block) |
+| Field       | CLI          | Image Config      | Default                                  |
+| ----------- | ------------ | ----------------- | ---------------------------------------- |
+| Command     | `cmd` args   | Entrypoint + Cmd  | `/bin/sh`                                |
+| Env vars    | `-e KEY=VAL` | Config.Env        | PATH, HOME, TERM                         |
+| Working dir | (from image) | Config.WorkingDir | `/`                                      |
+| vCPUs       | `--cpus`     |                   | `config.default_vcpu` (1)                |
+| Memory      | `--memory`   |                   | `config.default_memory_mb` (512)         |
+| Network     | `--network`  |                   | `config.default_network_mode` (tap)      |
+| Storage     | `--storage`  |                   | `config.default_storage_backend` (block) |
 
 ### MAC Address Generation
 
@@ -86,9 +87,10 @@ let cid = (hash % (u32::MAX - 3)) + 3;
 
 **File:** `crates/chvm-lib/src/oci/pull.rs` (~86 lines)
 
-Uses the `oci-distribution` crate for registry communication. Supports Docker Hub, GHCR, and other OCI-compliant registries, but only with **anonymous (public) access** — no credential or login support yet. Layers are downloaded via streaming (not buffered in memory) to keep memory usage low for large images.
+Uses the `oci-distribution` crate for registry communication. Supports Docker Hub, GHCR, and other OCI-compliant registries. Credentials are resolved from `~/.docker/config.json` (managed via `chvm login`); anonymous access is used when no credentials are found. Layers are downloaded via streaming (not buffered in memory) to keep memory usage low for large images.
 
 **Reference normalization** (`registry.rs`):
+
 - `alpine` -> `docker.io/library/alpine:latest`
 - `user/repo` -> `docker.io/user/repo:latest`
 - `ghcr.io/user/repo:v1` -> unchanged
@@ -137,19 +139,20 @@ Path traversal (`..`) is rejected for security.
 
 Communicates with Cloud Hypervisor via its REST API over a Unix domain socket. Uses hyper 1.x with `tokio::net::UnixStream` for UDS transport.
 
-| Endpoint | Method | Purpose |
-|----------|--------|---------|
-| `/api/v1/vmm.ping` | GET | Liveness check |
-| `/api/v1/vm.info` | GET | VM information |
-| `/api/v1/vm.shutdown` | PUT | Graceful shutdown |
-| `/api/v1/vm.power-button` | PUT | ACPI power button |
-| `/api/v1/vm.reboot` | PUT | Reboot |
+| Endpoint                  | Method | Purpose           |
+| ------------------------- | ------ | ----------------- |
+| `/api/v1/vmm.ping`        | GET    | Liveness check    |
+| `/api/v1/vm.info`         | GET    | VM information    |
+| `/api/v1/vm.shutdown`     | PUT    | Graceful shutdown |
+| `/api/v1/vm.power-button` | PUT    | ACPI power button |
+| `/api/v1/vm.reboot`       | PUT    | Reboot            |
 
 ### Process Management
 
 **File:** `crates/chvm-lib/src/hypervisor/process.rs` (~144 lines)
 
 **Binary discovery** (in order):
+
 1. `CHVM_CH_BIN` environment variable
 2. `which cloud-hypervisor` (PATH lookup)
 3. `/usr/local/bin/cloud-hypervisor`
@@ -200,6 +203,7 @@ chvm.env=Rk9PPWJhcg==
 ```
 
 Additional runtime parameters are appended by the VM manager:
+
 - `chvm.ip=192.168.200.2/24` -- Guest IP
 - `chvm.gw=192.168.200.1` -- Gateway
 - `chvm.mycelium_peer=tcp://...` -- Mycelium peers
@@ -229,6 +233,7 @@ pub trait NetworkBackend: Send + Sync {
 **File:** `crates/chvm-lib/src/network/tap.rs` (~219 lines)
 
 Setup:
+
 1. Create TAP device: `ip tuntap add dev tap-<id> mode tap`
 2. Ensure bridge `chvm0` exists (creates if needed)
 3. Attach TAP to bridge: `ip link set tap-<id> master chvm0`
@@ -237,6 +242,7 @@ Setup:
 6. Setup port forwarding iptables rules (DNAT + MASQUERADE)
 
 Teardown:
+
 1. Delete TAP device: `ip link del tap-<id>`
 2. Remove port forwarding iptables rules (PREROUTING DNAT, OUTPUT DNAT, POSTROUTING MASQUERADE)
 
@@ -303,7 +309,7 @@ pub trait StorageBackend: Send + Sync {
 
 Creates an ext4 disk image:
 
-1. Calculate size: `du -sb rootfs` * 1.5, minimum 256MB
+1. Calculate size: `du -sb rootfs` \* 1.5, minimum 256MB
 2. Create sparse file: `truncate -s <size> rootfs.img`
 3. Format: `mkfs.ext4 -F -L rootfs rootfs.img`
 4. Loop mount: `mount -o loop rootfs.img /tmp/mount`
@@ -314,6 +320,7 @@ Creates an ext4 disk image:
 9. Unmount
 
 Binary search order for chvm-init:
+
 1. `./target/x86_64-unknown-linux-musl/release/chvm-init`
 2. `./target/x86_64-unknown-linux-musl/debug/chvm-init`
 3. `./target/release/chvm-init`
@@ -322,6 +329,7 @@ Binary search order for chvm-init:
 6. `/usr/local/bin/chvm-init`
 
 Kernel modules injected:
+
 - `vsock.ko` -- Core vsock support
 - `vmw_vsock_virtio_transport_common.ko` -- Vsock transport commons
 - `vmw_vsock_virtio_transport.ko` -- Virtio vsock transport
@@ -343,6 +351,7 @@ merged   = ~/.chvm/vms/<id>/storage/merged/ (presented to virtiofsd)
 ```
 
 After mounting the overlay:
+
 1. **Inject chvm-init** into the merged directory (same search paths as block storage)
 2. Launch virtiofsd pointing at the merged directory
 3. The kernel cmdline is set to `root=rootfs rootfstype=virtiofs` (vs `root=/dev/vda` for block)
@@ -384,11 +393,13 @@ Cloud Hypervisor acts as a vsock-to-Unix-socket proxy. The host connects to the 
 **Port 1024 -- Exec**
 
 Request (JSON, one line):
+
 ```json
-{"cmd": ["ls", "/"], "env": ["FOO=bar"], "working_dir": "/tmp"}
+{ "cmd": ["ls", "/"], "env": ["FOO=bar"], "working_dir": "/tmp" }
 ```
 
 Response (streamed):
+
 ```
 OUTPUT:bin
 OUTPUT:etc
@@ -447,15 +458,15 @@ Modules must be loaded in dependency order: vsock -> transport_common -> transpo
 
 Reads `/proc/cmdline` and extracts `chvm.*` parameters:
 
-| Parameter | Encoding | Purpose |
-|-----------|----------|---------|
-| `chvm.cmd` | base64 (null-separated) | Command to execute |
-| `chvm.env` | base64 (null-separated) | Environment variables |
-| `chvm.workdir` | plain text | Working directory |
-| `chvm.ip` | CIDR notation | Guest IP address |
-| `chvm.gw` | IP address | Gateway |
-| `chvm.mycelium_peer` | URL | Mycelium peer (repeatable) |
-| `chvm.mounts` | `tag=path,tag=path` | Volume mount mappings |
+| Parameter            | Encoding                | Purpose                    |
+| -------------------- | ----------------------- | -------------------------- |
+| `chvm.cmd`           | base64 (null-separated) | Command to execute         |
+| `chvm.env`           | base64 (null-separated) | Environment variables      |
+| `chvm.workdir`       | plain text              | Working directory          |
+| `chvm.ip`            | CIDR notation           | Guest IP address           |
+| `chvm.gw`            | IP address              | Gateway                    |
+| `chvm.mycelium_peer` | URL                     | Mycelium peer (repeatable) |
+| `chvm.mounts`        | `tag=path,tag=path`     | Volume mount mappings      |
 
 ### Zombie Reaping
 
@@ -503,12 +514,12 @@ Extracts the uncompressed vmlinux ELF binary from `/boot/vmlinuz-<version>`:
 
 Searches for embedded kernel config (IKCONFIG) or reads `/proc/config.gz`. Checks for key `CONFIG_*` options needed by chvm:
 
-| Config | Required for |
-|--------|-------------|
-| `CONFIG_VSOCKETS` | Vsock exec/attach |
-| `CONFIG_VIRTIO_FS` | VirtioFS storage + volume mounts |
-| `CONFIG_VIRTIO_BLK` | Block device storage |
-| `CONFIG_IPV6` | Mycelium networking |
-| `CONFIG_TUN` | Mycelium networking |
+| Config              | Required for                     |
+| ------------------- | -------------------------------- |
+| `CONFIG_VSOCKETS`   | Vsock exec/attach                |
+| `CONFIG_VIRTIO_FS`  | VirtioFS storage + volume mounts |
+| `CONFIG_VIRTIO_BLK` | Block device storage             |
+| `CONFIG_IPV6`       | Mycelium networking              |
+| `CONFIG_TUN`        | Mycelium networking              |
 
 Reports each as `y` (built-in), `m` (module), or `n` (not available).

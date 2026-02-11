@@ -35,6 +35,8 @@ async fn main() -> anyhow::Result<()> {
         Commands::Doctor(args) => return commands::doctor::execute(args),
         Commands::Setup(args) => return commands::setup::execute(args),
         Commands::Kernel(args) => return commands::kernel::execute(args),
+        Commands::Login(args) => return commands::login::execute(args),
+        Commands::Logout(args) => return commands::logout::execute(args),
         _ => {}
     }
 
@@ -60,7 +62,8 @@ async fn main() -> anyhow::Result<()> {
         Commands::Images(args) => commands::images::execute(&manager, args),
         Commands::Prune(args) => commands::prune::execute(&mut manager, args).await,
         // Already handled above
-        Commands::Version(_) | Commands::Doctor(_) | Commands::Setup(_) | Commands::Kernel(_) => {
+        Commands::Version(_) | Commands::Doctor(_) | Commands::Setup(_) | Commands::Kernel(_)
+        | Commands::Login(_) | Commands::Logout(_) => {
             unreachable!()
         }
     }

@@ -8,11 +8,11 @@
 chvm [--verbose] <command>
 ```
 
-| Option | Description |
-|--------|-------------|
-| `--verbose` | Enable verbose output (debug logging) |
-| `-h, --help` | Print help |
-| `-V, --version` | Print version |
+| Option          | Description                           |
+| --------------- | ------------------------------------- |
+| `--verbose`     | Enable verbose output (debug logging) |
+| `-h, --help`    | Print help                            |
+| `-V, --version` | Print version                         |
 
 ---
 
@@ -24,22 +24,23 @@ Pull an OCI image from a container registry.
 chvm pull <IMAGE>
 ```
 
-Images are pulled from Docker Hub by default. Other OCI-compatible registries work too, but only **public images** are supported (anonymous access only — no credential/login support yet).
+Images are pulled from Docker Hub by default. Other OCI-compatible registries work too. Both public and private images are supported.
 
 ```bash
 chvm pull alpine:latest                        # Docker Hub library image
 chvm pull busybox:1.36                         # Specific tag
 chvm pull ubuntu:22.04                         # Ubuntu
-chvm pull ghcr.io/user/public-repo:v1          # GitHub Container Registry (public only)
+chvm pull ghcr.io/user/repo:v1                 # GitHub Container Registry
 ```
 
 Registry selection is automatic based on the image reference format:
+
 - `alpine:latest` -- defaults to `docker.io/library/alpine:latest`
 - `myuser/myimage` -- defaults to `docker.io/myuser/myimage:latest`
 - `ghcr.io/user/repo:v1` -- uses GitHub Container Registry as-is
 - References containing a `.` in the hostname part are treated as custom registries
 
-**Note:** Private registries and images requiring authentication are not yet supported. Only publicly accessible images can be pulled.
+Credentials are resolved from `~/.docker/config.json` (see `chvm login`). If no credentials are found, anonymous access is used.
 
 Images are cached in `~/.chvm/images/`. Re-pulling a cached image is a no-op.
 
@@ -53,21 +54,21 @@ Create and start a VM in one step.
 chvm run [OPTIONS] <IMAGE> [CMD...]
 ```
 
-| Option | Default | Description |
-|--------|---------|-------------|
-| `--name <NAME>` | auto-generated | VM name |
-| `--cpus <N>` | 1 | Number of vCPUs |
-| `--memory <N>` | 512 | Memory in MB |
-| `--storage <TYPE>` | block | Storage backend: `block` or `virtiofs` |
-| `--network <MODE>` | tap | Network mode: `tap`, `mycelium`, or `none` |
-| `-p, --publish <HOST:GUEST[/PROTO]>` | | Port forward, optional `/tcp` or `/udp` (repeatable) |
-| `-e, --env <KEY=VALUE>` | | Environment variable (repeatable) |
-| `-v, --volume <HOST:GUEST[:ro]>` | | Volume mount (repeatable) |
-| `--kernel <PATH>` | | Custom kernel path |
-| `-d, --detach` | false | Run in background |
-| `--rm` | false | Remove VM when it exits |
-| `--rootfs <DIR>` | | Use local rootfs directory instead of image |
-| `--mycelium-peers <ADDR>` | | Mycelium peer addresses (repeatable) |
+| Option                               | Default        | Description                                          |
+| ------------------------------------ | -------------- | ---------------------------------------------------- |
+| `--name <NAME>`                      | auto-generated | VM name                                              |
+| `--cpus <N>`                         | 1              | Number of vCPUs                                      |
+| `--memory <N>`                       | 512            | Memory in MB                                         |
+| `--storage <TYPE>`                   | block          | Storage backend: `block` or `virtiofs`               |
+| `--network <MODE>`                   | tap            | Network mode: `tap`, `mycelium`, or `none`           |
+| `-p, --publish <HOST:GUEST[/PROTO]>` |                | Port forward, optional `/tcp` or `/udp` (repeatable) |
+| `-e, --env <KEY=VALUE>`              |                | Environment variable (repeatable)                    |
+| `-v, --volume <HOST:GUEST[:ro]>`     |                | Volume mount (repeatable)                            |
+| `--kernel <PATH>`                    |                | Custom kernel path                                   |
+| `-d, --detach`                       | false          | Run in background                                    |
+| `--rm`                               | false          | Remove VM when it exits                              |
+| `--rootfs <DIR>`                     |                | Use local rootfs directory instead of image          |
+| `--mycelium-peers <ADDR>`            |                | Mycelium peer addresses (repeatable)                 |
 
 ```bash
 # Foreground (blocks until exit)
@@ -138,8 +139,8 @@ Remove a VM.
 chvm rm [-f] <CONTAINER>
 ```
 
-| Option | Description |
-|--------|-------------|
+| Option        | Description                          |
+| ------------- | ------------------------------------ |
 | `-f, --force` | Remove even if running (stops first) |
 
 ```bash
@@ -157,10 +158,10 @@ Execute a command inside a running VM.
 chvm exec [OPTIONS] <CONTAINER> <CMD...>
 ```
 
-| Option | Description |
-|--------|-------------|
+| Option                  | Description                           |
+| ----------------------- | ------------------------------------- |
 | `-e, --env <KEY=VALUE>` | Set environment variable (repeatable) |
-| `-w, --workdir <DIR>` | Set working directory |
+| `-w, --workdir <DIR>`   | Set working directory                 |
 
 ```bash
 chvm exec myvm echo hello
@@ -203,8 +204,8 @@ chvm list [-a]
 
 Aliases: `chvm ps`, `chvm ls`
 
-| Option | Description |
-|--------|-------------|
+| Option      | Description                          |
+| ----------- | ------------------------------------ |
 | `-a, --all` | Show all VMs (default: running only) |
 
 ```bash
@@ -224,8 +225,8 @@ Show VM console output.
 chvm logs [-f] <CONTAINER>
 ```
 
-| Option | Description |
-|--------|-------------|
+| Option         | Description       |
+| -------------- | ----------------- |
 | `-f, --follow` | Follow log output |
 
 Shows the serial console log from the guest kernel and init process.
@@ -283,6 +284,7 @@ chvm doctor
 ```
 
 Checks for:
+
 - Cloud Hypervisor binary
 - virtiofsd binary
 - Kernel availability
@@ -317,12 +319,12 @@ Manage kernels.
 chvm kernel <SUBCOMMAND>
 ```
 
-| Subcommand | Description |
-|------------|-------------|
-| `list` | List available kernels in `~/.chvm/kernels/` |
-| `set-default <NAME>` | Set the default kernel (creates vmlinux symlink) |
-| `extract-host` | Extract vmlinux from the running host kernel |
-| `check [PATH]` | Check kernel capabilities (vsock, virtiofs, IPv6, TUN) |
+| Subcommand           | Description                                            |
+| -------------------- | ------------------------------------------------------ |
+| `list`               | List available kernels in `~/.chvm/kernels/`           |
+| `set-default <NAME>` | Set the default kernel (creates vmlinux symlink)       |
+| `extract-host`       | Extract vmlinux from the running host kernel           |
+| `check [PATH]`       | Check kernel capabilities (vsock, virtiofs, IPv6, TUN) |
 
 ```bash
 chvm kernel list
@@ -476,6 +478,7 @@ chvm run -d --storage virtiofs --name myvm alpine:latest sleep 3600
 Creates an overlay filesystem (to allow writes without modifying the cached rootfs), injects `chvm-init` into the overlay, and launches virtiofsd. The kernel boots with `root=rootfs rootfstype=virtiofs` and mounts the virtiofs share directly as the root filesystem.
 
 **Requirements:**
+
 - `virtiofsd` installed (typically at `/usr/libexec/virtiofsd` or `/usr/lib/qemu/virtiofsd` — check with `chvm doctor`)
 - A kernel with `CONFIG_FUSE_FS=y` and `CONFIG_VIRTIO_FS=y`
 
@@ -533,10 +536,13 @@ All fields are optional and fall back to defaults if not specified. Set `kernel_
 
 ### Environment Variables
 
-| Variable | Description |
-|----------|-------------|
-| `CHVM_HOME` | Override data directory (default: `~/.chvm`) |
-| `CHVM_CH_BIN` | Override Cloud Hypervisor binary path |
+| Variable      | Description                                  |
+| ------------- | -------------------------------------------- |
+| `CHVM_HOME`   | Override data directory (default: `~/.chvm`) |
+| `CHVM_CH_BIN` | Override Cloud Hypervisor binary path        |
+| ----------    | -------------                                |
+| `CHVM_HOME`   | Override data directory (default: `~/.chvm`) |
+| `CHVM_CH_BIN` | Override Cloud Hypervisor binary path        |
 
 ---
 
@@ -611,7 +617,7 @@ Install virtiofsd. On Ubuntu/Debian:
 sudo apt install virtiofsd
 ```
 
-Or build from source: https://gitlab.com/virtio-fs/virtiofsd
+Or build from source: <https://gitlab.com/virtio-fs/virtiofsd>
 
 ### VM won't start
 
