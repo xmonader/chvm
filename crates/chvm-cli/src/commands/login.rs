@@ -43,7 +43,18 @@ pub fn execute(args: &LoginArgs) -> anyhow::Result<()> {
         DockerConfig::default()
     };
 
-    config.set_auth(&args.server, &username, &password);
+    let server = args.server.trim();
+    if server.is_empty() {
+        anyhow::bail!("Server cannot be empty");
+    }
+    if server.contains(char::is_whitespace) {
+        anyhow::bail!("Server cannot contain whitespace");
+    }
+    if server.contains('\0') {
+        anyhow::bail!("Server cannot contain null bytes");
+    }
+
+    config.set_auth(server, &username, &password);
     config.save(&config_path)?;
 
     println!("Login Succeeded");

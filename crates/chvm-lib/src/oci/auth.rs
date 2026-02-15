@@ -6,27 +6,48 @@ use serde::{Deserialize, Serialize};
 use tracing::{debug, warn};
 
 /// Credentials for authenticating with an OCI registry.
-#[derive(Debug, Clone, Default)]
-pub struct RegistryCredentials {
-    pub username: Option<String>,
-    pub password: Option<String>,
+/// Either anonymous or basic auth (username + password together).
+#[derive(Debug, Clone)]
+pub enum RegistryCredentials {
+    Anonymous,
+    Basic { username: String, password: String },
+}
+
+impl Default for RegistryCredentials {
+    fn default() -> Self {
+        Self::Anonymous
+    }
 }
 
 impl RegistryCredentials {
     /// Create credentials from explicit username/password.
     pub fn basic(username: String, password: String) -> Self {
-        Self {
-            username: Some(username),
-            password: Some(password),
-        }
+        Self::Basic { username, password }
     }
 
     /// Convert to `oci_distribution::secrets::RegistryAuth`.
     pub fn to_registry_auth(&self) -> oci_distribution::secrets::RegistryAuth {
-        if let (Some(u), Some(p)) = (&self.username, &self.password) {
-            oci_distribution::secrets::RegistryAuth::Basic(u.clone(), p.clone())
-        } else {
-            oci_distribution::secrets::RegistryAuth::Anonymous
+        match self {
+            RegistryCredentials::Anonymous => oci_distribution::secrets::RegistryAuth::Anonymous,
+            RegistryCredentials::Basic { username, password } => {
+                oci_distribution::secrets::RegistryAuth::Basic(username.clone(), password.clone())
+            }
+        }
+    }
+
+    /// Get username if basic auth.
+    pub fn username(&self) -> Option<&str> {
+        match self {
+            RegistryCredentials::Anonymous => None,
+            RegistryCredentials::Basic { username, .. } => Some(username),
+        }
+    }
+
+    /// Get password if basic auth.
+    pub fn password(&self) -> Option<&str> {
+        match self {
+            RegistryCredentials::Anonymous => None,
+            RegistryCredentials::Basic { password, .. } => Some(password),
         }
     }
 }
@@ -121,7 +142,12 @@ impl DockerConfig {
 
         for candidate in &candidates {
             if let Some(entry) = self.auths.get(candidate) {
-                return entry_to_credentials(entry);
+                match entry_to_credentials(entry) {
+                    Ok(creds) => return Some(creds),
+                    Err(e) => {
+                        warn!(registry = %candidate, error = %e, "Failed to parse credentials");
+                    }
+                }
             }
         }
 
@@ -132,7 +158,12 @@ impl DockerConfig {
                 .trim_start_matches("http://")
                 .trim_end_matches('/');
             if stripped == registry {
-                return entry_to_credentials(entry);
+                match entry_to_credentials(entry) {
+                    Ok(creds) => return Some(creds),
+                    Err(e) => {
+                        warn!(registry = %key, error = %e, "Failed to parse credentials");
+                    }
+                }
             }
         }
 
@@ -158,17 +189,24 @@ impl DockerConfig {
 }
 
 /// Decode a base64 "auth" field (format: "username:password") into RegistryCredentials.
-fn entry_to_credentials(entry: &AuthEntry) -> Option<RegistryCredentials> {
-    let auth = entry.auth.as_deref()?;
-    let decoded = base64::engine::general_purpose::STANDARD.decode(auth).ok()?;
-    let decoded_str = String::from_utf8(decoded).ok()?;
-    let (user, pass) = decoded_str.split_once(':')?;
+fn entry_to_credentials(entry: &AuthEntry) -> Result<RegistryCredentials, anyhow::Error> {
+    let auth = entry.auth.as_deref().ok_or_else(|| anyhow::anyhow!("No auth field found"))?;
+    
+    let decoded = base64::engine::general_purpose::STANDARD
+        .decode(auth)
+        .map_err(|e| anyhow::anyhow!("Invalid base64 encoding: {}", e))?;
+    
+    let decoded_str = String::from_utf8(decoded)
+        .map_err(|e| anyhow::anyhow!("Invalid UTF-8 in decoded auth: {}", e))?;
+    
+    let (user, pass) = decoded_str.split_once(':')
+        .ok_or_else(|| anyhow::anyhow!("Auth field missing ':' separator"))?;
 
     if user.is_empty() || pass.is_empty() {
-        return None;
+        return Err(anyhow::anyhow!("Username or password cannot be empty"));
     }
 
-    Some(RegistryCredentials::basic(user.to_string(), pass.to_string()))
+    Ok(RegistryCredentials::basic(user.to_string(), pass.to_string()))
 }
 
 /// Extract the registry hostname from an image reference.
@@ -233,8 +271,8 @@ mod tests {
         config.set_auth("docker.io", "testuser", "testpass");
 
         let creds = config.get_auth("docker.io").unwrap();
-        assert_eq!(creds.username.unwrap(), "testuser");
-        assert_eq!(creds.password.unwrap(), "testpass");
+        assert_eq!(creds.username().unwrap(), "testuser");
+        assert_eq!(creds.password().unwrap(), "testpass");
     }
 
     #[test]
@@ -248,8 +286,8 @@ mod tests {
         );
 
         let creds = config.get_auth("index.docker.io").unwrap();
-        assert_eq!(creds.username.unwrap(), "myuser");
-        assert_eq!(creds.password.unwrap(), "mypass");
+        assert_eq!(creds.username().unwrap(), "myuser");
+        assert_eq!(creds.password().unwrap(), "mypass");
     }
 
     #[test]
@@ -283,7 +321,7 @@ mod tests {
     fn test_resolve_credentials_falls_back_to_anonymous() {
         // With no Docker config available, should fall back to anonymous
         let resolved = resolve_credentials("nonexistent.registry.io");
-        assert!(resolved.username.is_none());
-        assert!(resolved.password.is_none());
+        assert!(resolved.username().is_none());
+        assert!(resolved.password().is_none());
     }
 }
