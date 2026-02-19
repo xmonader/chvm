@@ -144,6 +144,7 @@ pub struct CreateOptions {
     pub detach: bool,
     pub remove_after: bool,
     pub mycelium_peers: Vec<String>,
+    pub credentials: Option<oci::RegistryCredentials>,
 }
 
 pub struct ExecOptions {
@@ -174,11 +175,11 @@ impl VmManager {
     }
 
     /// Pull an OCI image into the cache.
-    pub async fn pull(&mut self, image_ref: &str) -> Result<oci::CachedImage> {
+    pub async fn pull(&mut self, image_ref: &str, credentials: &oci::RegistryCredentials) -> Result<oci::CachedImage> {
         info!(image = image_ref, "Pulling image");
 
         // Try registry pull first
-        match oci::pull::pull_image(image_ref, &self.paths.images).await {
+        match oci::pull::pull_image(image_ref, &self.paths.images, credentials).await {
             Ok(result) => {
                 let cached = self.image_cache.add(&result)?;
                 return Ok(cached);
@@ -210,8 +211,11 @@ impl VmManager {
             return Err(ChvmError::VmAlreadyExists(name));
         }
 
+        let credentials = opts.credentials.as_ref()
+            .cloned()
+            .unwrap_or_default();
         let (rootfs_path, image_ref, image_digest, image_config) =
-            self.resolve_image_or_rootfs(&opts).await?;
+            self.resolve_image_or_rootfs(&opts, &credentials).await?;
 
         let vm_dir = self.paths.vm_dir(&vm_id);
         std::fs::create_dir_all(&vm_dir)?;
@@ -462,6 +466,7 @@ impl VmManager {
     async fn resolve_image_or_rootfs(
         &mut self,
         opts: &CreateOptions,
+        credentials: &oci::RegistryCredentials,
     ) -> Result<(String, String, Option<String>, Option<oci::ImageConfig>)> {
         if let Some(ref rootfs) = opts.rootfs_path {
             let abs = std::fs::canonicalize(rootfs)?;
@@ -473,7 +478,7 @@ impl VmManager {
                 Ok(cached) => cached,
                 Err(_) => {
                     info!(image = ref_str, "Image not in cache, pulling...");
-                    self.pull(ref_str).await?
+                    self.pull(ref_str, credentials).await?
                 }
             };
             let rootfs = self.image_cache.ensure_rootfs(&cached)?;

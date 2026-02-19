@@ -64,6 +64,12 @@ pub enum Commands {
 
     /// Show version information
     Version(VersionArgs),
+
+    /// Log in to a container registry
+    Login(LoginArgs),
+
+    /// Log out from a container registry
+    Logout(LogoutArgs),
 }
 
 #[derive(clap::Args)]
@@ -292,3 +298,29 @@ pub struct KernelCheckArgs {
 
 #[derive(clap::Args)]
 pub struct VersionArgs {}
+
+#[derive(clap::Args)]
+pub struct LoginArgs {
+    /// Registry server (default: docker.io)
+    #[arg(default_value = "docker.io")]
+    pub server: String,
+
+    /// Username
+    #[arg(short, long)]
+    pub username: Option<String>,
+
+    /// Password
+    #[arg(short, long)]
+    pub password: Option<String>,
+
+    /// Read password from stdin
+    #[arg(long)]
+    pub password_stdin: bool,
+}
+
+#[derive(clap::Args)]
+pub struct LogoutArgs {
+    /// Registry server (default: docker.io)
+    #[arg(default_value = "docker.io")]
+    pub server: String,
+}

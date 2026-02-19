@@ -7,7 +7,8 @@ chvm lets you pull OCI container images and run them as hardware-isolated virtua
 ## Features
 
 - **Docker-like CLI** -- `chvm run`, `chvm exec`, `chvm attach`, `chvm stop`, `chvm rm`
-- **OCI image support** -- Pull public images from Docker Hub and other OCI-compatible registries
+- **OCI image support** -- Pull images from Docker Hub and other OCI-compatible registries
+- **Registry authentication** -- `chvm login`/`chvm logout` with credentials stored in `~/.docker/config.json`
 - **Fast boot** -- MicroVMs start in 2-5 seconds
 - **TAP networking** -- Bridge-based networking with NAT, port forwarding, and DNS
 - **Mycelium networking** -- Peer-to-peer IPv6 overlay network with automatic binary injection and IP tracking
@@ -87,16 +88,25 @@ sudo chvm setup
 ### Images
 
 ```bash
-# Pull from Docker Hub (public images only — no auth support yet)
+# Pull from Docker Hub
 chvm pull alpine:latest
 chvm pull ubuntu:22.04
 
-# Pull from other public registries
-chvm pull ghcr.io/user/public-repo:v1
+# Pull from other registries
+chvm pull ghcr.io/user/repo:v1
 
 # List cached images
 chvm images
+
+# Log in to a registry (credentials stored in ~/.docker/config.json)
+chvm login docker.io
+chvm login ghcr.io
+
+# Log out
+chvm logout docker.io
 ```
+
+> **Note:** Credentials are stored as base64-encoded tokens in `~/.docker/config.json`
 
 ### VM Lifecycle
 
@@ -207,10 +217,10 @@ sudo chvm run --rm --rootfs /path/to/rootfs alpine:latest /bin/sh -c "echo custo
 
 **Storage backends:**
 
-| Backend | Flag | Description |
-|---------|------|-------------|
-| `block` (default) | `--storage block` | Creates an ext4 disk image. Works with any kernel. No extra daemons. |
-| `virtiofs` | `--storage virtiofs` | Uses overlay + virtiofsd. Requires `virtiofsd` and a kernel with `CONFIG_FUSE_FS` + `CONFIG_VIRTIO_FS`. The custom kernel (`vmlinux-chvm-6.6.70`) has these built-in; the host-extracted kernel typically does not. |
+| Backend           | Flag                 | Description                                                                                                                                                                                                         |
+| ----------------- | -------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `block` (default) | `--storage block`    | Creates an ext4 disk image. Works with any kernel. No extra daemons.                                                                                                                                                |
+| `virtiofs`        | `--storage virtiofs` | Uses overlay + virtiofsd. Requires `virtiofsd` and a kernel with `CONFIG_FUSE_FS` + `CONFIG_VIRTIO_FS`. The custom kernel (`vmlinux-chvm-6.6.70`) has these built-in; the host-extracted kernel typically does not. |
 
 See [Kernel Management](#kernel-management) for building a custom kernel.
 
@@ -315,17 +325,13 @@ See [docs/user-guide.md](docs/user-guide.md) for more examples.
 
 chvm is structured as a Rust workspace with three crates:
 
-| Crate | Purpose |
-|-------|---------|
-| `chvm-cli` | CLI binary with clap-based command parsing |
-| `chvm-lib` | Core library: VM management, OCI, networking, storage, hypervisor API |
-| `chvm-init` | Guest init binary (PID 1 inside VMs), statically linked with musl |
+| Crate       | Purpose                                                               |
+| ----------- | --------------------------------------------------------------------- |
+| `chvm-cli`  | CLI binary with clap-based command parsing                            |
+| `chvm-lib`  | Core library: VM management, OCI, networking, storage, hypervisor API |
+| `chvm-init` | Guest init binary (PID 1 inside VMs), statically linked with musl     |
 
 See [docs/architecture.md](docs/architecture.md) for detailed design documentation.
-
-## TODO
-
-- [ ] Registry authentication (`chvm login`, Docker config, credential helpers)
 
 ## Documentation
 
