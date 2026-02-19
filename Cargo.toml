@@ -37,7 +37,7 @@ hyperlocal = "0.9"
 clap = { version = "4.5", features = ["derive"] }
 
 # OCI
-oci-distribution = "0.11"
+oci-distribution = { version = "0.11", default-features = false, features = ["rustls-tls"] }
 oci-spec = "0.7"
 
 # Archive
@@ -47,6 +47,7 @@ zstd = "0.13"
 
 # Terminal
 crossterm = "0.28"
+rpassword = "5"
 
 # Linux
 nix = { version = "0.29", features = ["fs", "mount", "signal", "process", "net", "ioctl", "socket", "user"] }

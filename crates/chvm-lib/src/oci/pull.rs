@@ -1,12 +1,10 @@
 use std::path::{Path, PathBuf};
 
-use futures::StreamExt;
 use oci_distribution::client::{ClientConfig, ClientProtocol};
-use oci_distribution::secrets::RegistryAuth;
 use oci_distribution::{Client, Reference};
-use tokio::io::AsyncWriteExt;
 use tracing::info;
 
+use crate::oci::auth::RegistryCredentials;
 use crate::oci::image_config::ImageConfig;
 use crate::oci::registry::sanitize_digest;
 
@@ -20,7 +18,11 @@ pub struct PullResult {
 }
 
 /// Pull an OCI image from a registry.
-pub async fn pull_image(image_ref: &str, images_dir: &Path) -> anyhow::Result<PullResult> {
+pub async fn pull_image(
+    image_ref: &str,
+    images_dir: &Path,
+    credentials: &RegistryCredentials,
+) -> anyhow::Result<PullResult> {
     let normalized = crate::oci::registry::normalize_reference(image_ref);
     info!(image = %normalized, "Pulling image");
 
@@ -45,7 +47,7 @@ pub async fn pull_image(image_ref: &str, images_dir: &Path) -> anyhow::Result<Pu
     };
 
     let client = Client::new(client_config);
-    let auth = RegistryAuth::Anonymous;
+    let auth = credentials.to_registry_auth();
 
     // Use pull_manifest_and_config which handles ImageIndex resolution via platform_resolver
     let (img_manifest, digest_str, config_str) =
@@ -81,15 +83,9 @@ pub async fn pull_image(image_ref: &str, images_dir: &Path) -> anyhow::Result<Pu
             "Downloading layer"
         );
 
-        // Stream layer directly to disk to avoid buffering large layers in memory
-        let mut stream = client.pull_blob_stream(&reference, layer).await?;
+        // Stream layer directly to disk via pull_blob (streams internally, no full buffering)
         let mut file = tokio::fs::File::create(&layer_path).await?;
-        while let Some(chunk) = stream.next().await {
-            let chunk = chunk?;
-            file.write_all(&chunk).await?;
-        }
-        file.flush().await?;
-        drop(file);
+        client.pull_blob(&reference, layer, &mut file).await?;
         layer_paths.push(layer_path.to_string_lossy().to_string());
     }
 

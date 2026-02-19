@@ -6,6 +6,8 @@ pub mod images;
 pub mod inspect;
 pub mod kernel;
 pub mod list;
+pub mod login;
+pub mod logout;
 pub mod logs;
 pub mod prune;
 pub mod pull;
@@ -16,6 +18,7 @@ pub mod start;
 pub mod stop;
 pub mod version;
 
+use chvm_lib::oci::{registry_from_image_ref, resolve_credentials};
 use chvm_lib::vm::manager::CreateOptions;
 use chvm_lib::vm::state::{MountConfig, NetworkMode, PortForward};
 
@@ -149,6 +152,9 @@ pub fn build_create_options(
         .collect::<std::result::Result<Vec<_>, _>>()
         .map_err(|e: String| anyhow::anyhow!(e))?;
 
+    let registry = registry_from_image_ref(args.image());
+    let credentials = resolve_credentials(&registry);
+
     Ok(CreateOptions {
         name: args.name(),
         image_ref: if args.rootfs().is_some() {
@@ -169,5 +175,6 @@ pub fn build_create_options(
         detach,
         remove_after,
         mycelium_peers: args.mycelium_peers().to_vec(),
+        credentials: Some(credentials),
     })
 }
