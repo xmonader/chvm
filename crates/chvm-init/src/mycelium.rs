@@ -21,15 +21,17 @@ pub fn setup_mycelium() -> Result<(), Box<dyn std::error::Error>> {
 
     println!("[init] Starting mycelium with peers: {peers}");
 
-    let mycelium_bin = crate::helpers::find_binary("mycelium", &[])
-        .ok_or("mycelium binary not found")?;
+    let mycelium_bin =
+        crate::helpers::find_binary("mycelium", &[]).ok_or("mycelium binary not found")?;
 
     let _ = std::fs::create_dir_all("/etc/mycelium");
     let key = key_path.unwrap_or_else(|| "/etc/mycelium/priv_key.bin".to_string());
 
     let mut args = vec![
-        "--key-file".to_string(), key,
-        "--tun-name".to_string(), "mycelium".to_string(),
+        "--key-file".to_string(),
+        key,
+        "--tun-name".to_string(),
+        "mycelium".to_string(),
         "--disable-quic".to_string(),
     ];
 
@@ -54,4 +56,3 @@ pub fn setup_mycelium() -> Result<(), Box<dyn std::error::Error>> {
 
     Ok(())
 }
-

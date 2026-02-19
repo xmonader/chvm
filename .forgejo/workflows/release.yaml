@@ -1,0 +1,118 @@
+name: Create Release
+
+on:
+  push:
+    tags:
+      - "v*" # Push events to matching v*, i.e. v1.0, v20.15.10
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  packages: write
+
+env:
+  BINARY_NAME: chvm
+
+jobs:
+  build:
+    runs-on: docker
+    container:
+      image: ghcr.io/despiegk/builder:latest
+
+    strategy:
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-musl
+            artifact: linux-amd64-musl
+            cross: true
+
+    defaults:
+      run:
+        shell: bash
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.ref }}
+
+      - name: Setup toolchain
+        run: |
+          set -e
+          source $HOME/.cargo/env || source /root/.cargo/env || true
+          export PATH="$HOME/.cargo/bin:/root/.cargo/bin:$PATH"
+
+          if [ "${{ matrix.cross }}" = "true" ]; then
+            rustup target add ${{ matrix.target }}
+          fi
+
+      - name: Install system dependencies
+        run: |
+          apt-get update && apt-get install -y capnproto musl-dev musl-tools jq
+
+      - name: Build
+        run: |
+          set -e
+          source $HOME/.cargo/env || source /root/.cargo/env || true
+          export PATH="$HOME/.cargo/bin:/root/.cargo/bin:$PATH"
+
+          if [ "${{ matrix.cross }}" = "true" ]; then
+            cargo build --release --target ${{ matrix.target }} --features build-binary
+            BIN="target/${{ matrix.target }}/release/${{ env.BINARY_NAME }}"
+          else
+            cargo build --release --features build-binary
+            BIN="target/release/${{ env.BINARY_NAME }}"
+          fi
+
+          if [ ! -f "$BIN" ]; then
+            echo "ERROR: Binary $BIN not found"
+            exit 1
+          fi
+          echo "Build successful: $BIN"
+          strip "$BIN"
+
+      - name: Create Release
+        id: create-release
+        env:
+          TOKEN: ${{ secrets.FORGEJO_TOKEN }}
+        run: |
+          set -e
+          RELEASE_DATA=$(cat <<EOF
+          {
+            "tag_name": "${{ github.ref_name }}",
+            "name": "Release ${{ github.ref_name }}",
+            "draft": false,
+            "prerelease": false
+          }
+          EOF
+          )
+          
+          RESPONSE=$(curl -s -X POST \
+            -H "Authorization: token $TOKEN" \
+            -H "Accept: application/json" \
+            -H "Content-Type: application/json" \
+            -d "$RELEASE_DATA" \
+            "${{ github.server_url }}/api/v1/repos/${{ github.repository }}/releases")
+          
+          echo "release_id=$(echo "$RESPONSE" | jq -r .id)" >> $GITHUB_OUTPUT
+
+      - name: Upload Release Assets
+        env:
+          TOKEN: ${{ secrets.FORGEJO_TOKEN }}
+        run: |
+          set -e
+          if [ "${{ matrix.cross }}" = "true" ]; then
+            BIN="target/${{ matrix.target }}/release/${{ env.BINARY_NAME }}"
+          else
+            BIN="target/release/${{ env.BINARY_NAME }}"
+          fi
+
+          ARTIFACT="${{ env.BINARY_NAME }}-${{ matrix.artifact }}"
+          echo "Uploading $BIN as release asset: $ARTIFACT"
+          
+          curl -s -X POST \
+            -H "Authorization: token $TOKEN" \
+            -H "Accept: application/json" \
+            -H "Content-Type: application/x-pie-executable" \
+            --data-binary @"$BIN" \
+            "${{ github.server_url }}/api/v1/repos/${{ github.repository }}/releases/${{ steps.create-release.outputs.release_id }}/assets?name=$ARTIFACT"

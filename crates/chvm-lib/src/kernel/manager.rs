@@ -45,9 +45,10 @@ impl KernelManager {
     pub fn select_kernel(&self, network_mode: &str) -> Result<String> {
         let kernels = self.list_kernels()?;
         if kernels.is_empty() {
-            return Err(ChvmError::KernelNotFound(
-                format!("no kernels found in {}. Run 'chvm setup all' or 'chvm kernel extract-host'", self.kernel_dir.display())
-            ));
+            return Err(ChvmError::KernelNotFound(format!(
+                "no kernels found in {}. Run 'chvm setup all' or 'chvm kernel extract-host'",
+                self.kernel_dir.display()
+            )));
         }
 
         // For mycelium, prefer kernel with IPv6 + TUN
@@ -79,7 +80,8 @@ impl KernelManager {
             return Ok(default.to_string_lossy().to_string());
         }
 
-        kernels.first()
+        kernels
+            .first()
             .map(|k| k.path.to_string_lossy().to_string())
             .ok_or_else(|| ChvmError::KernelNotFound("no suitable kernel found".into()))
     }
@@ -115,7 +117,9 @@ impl KernelManager {
                 size,
                 is_symlink,
                 symlink_target: if is_symlink {
-                    std::fs::read_link(&path).ok().map(|p| p.to_string_lossy().to_string())
+                    std::fs::read_link(&path)
+                        .ok()
+                        .map(|p| p.to_string_lossy().to_string())
                 } else {
                     None
                 },
@@ -152,11 +156,14 @@ impl KernelManager {
             "/boot/vmlinux".into(),
         ];
 
-        let kernel_image = possible_paths.iter()
+        let kernel_image = possible_paths
+            .iter()
             .find(|p| Path::new(p).exists())
-            .ok_or_else(|| ChvmError::KernelNotFound(
-                format!("could not find host kernel image (tried /boot/vmlinuz-{version})")
-            ))?;
+            .ok_or_else(|| {
+                ChvmError::KernelNotFound(format!(
+                    "could not find host kernel image (tried /boot/vmlinuz-{version})"
+                ))
+            })?;
 
         info!(source = %kernel_image, "Extracting host kernel");
 
@@ -169,9 +176,10 @@ impl KernelManager {
         let meta = std::fs::metadata(&dest)?;
         if meta.len() < 1_000_000 {
             let _ = std::fs::remove_file(&dest);
-            return Err(ChvmError::KernelNotFound(
-                format!("extracted kernel too small ({} bytes)", meta.len())
-            ));
+            return Err(ChvmError::KernelNotFound(format!(
+                "extracted kernel too small ({} bytes)",
+                meta.len()
+            )));
         }
 
         Ok(dest.to_string_lossy().to_string())
@@ -182,11 +190,26 @@ impl KernelManager {
         let config = extract_kernel_config(kernel_path)?;
 
         Some(KernelCapabilities {
-            has_ipv6: config.get("CONFIG_IPV6").map(|v| v == "y" || v == "m").unwrap_or(false),
-            has_tun: config.get("CONFIG_TUN").map(|v| v == "y" || v == "m").unwrap_or(false),
-            has_virtiofs: config.get("CONFIG_VIRTIO_FS").map(|v| v == "y" || v == "m").unwrap_or(false),
-            has_virtio_block: config.get("CONFIG_VIRTIO_BLK").map(|v| v == "y" || v == "m").unwrap_or(false),
-            has_vsock: config.get("CONFIG_VSOCKETS").map(|v| v == "y" || v == "m").unwrap_or(false),
+            has_ipv6: config
+                .get("CONFIG_IPV6")
+                .map(|v| v == "y" || v == "m")
+                .unwrap_or(false),
+            has_tun: config
+                .get("CONFIG_TUN")
+                .map(|v| v == "y" || v == "m")
+                .unwrap_or(false),
+            has_virtiofs: config
+                .get("CONFIG_VIRTIO_FS")
+                .map(|v| v == "y" || v == "m")
+                .unwrap_or(false),
+            has_virtio_block: config
+                .get("CONFIG_VIRTIO_BLK")
+                .map(|v| v == "y" || v == "m")
+                .unwrap_or(false),
+            has_vsock: config
+                .get("CONFIG_VSOCKETS")
+                .map(|v| v == "y" || v == "m")
+                .unwrap_or(false),
         })
     }
 
@@ -194,7 +217,10 @@ impl KernelManager {
     pub fn check_mycelium_support(&self) -> (bool, String) {
         let default = self.kernel_dir.join("vmlinux");
         if !default.exists() {
-            return (false, "No default kernel found. Run 'chvm setup all' first.".into());
+            return (
+                false,
+                "No default kernel found. Run 'chvm setup all' first.".into(),
+            );
         }
 
         let host_kernel = self.kernel_dir.join("vmlinux-host");
@@ -207,15 +233,26 @@ impl KernelManager {
                 return (true, "Default kernel supports mycelium.".into());
             }
             let mut missing = Vec::new();
-            if !caps.has_ipv6 { missing.push("IPv6 (CONFIG_IPV6)"); }
-            if !caps.has_tun { missing.push("TUN (CONFIG_TUN)"); }
-            return (false, format!(
-                "Default kernel missing: {}. Run 'chvm kernel extract-host'.",
-                missing.join(", ")
-            ));
+            if !caps.has_ipv6 {
+                missing.push("IPv6 (CONFIG_IPV6)");
+            }
+            if !caps.has_tun {
+                missing.push("TUN (CONFIG_TUN)");
+            }
+            return (
+                false,
+                format!(
+                    "Default kernel missing: {}. Run 'chvm kernel extract-host'.",
+                    missing.join(", ")
+                ),
+            );
         }
 
-        (false, "Cannot verify kernel capabilities. If mycelium fails, run 'chvm kernel extract-host'.".into())
+        (
+            false,
+            "Cannot verify kernel capabilities. If mycelium fails, run 'chvm kernel extract-host'."
+                .into(),
+        )
     }
 
     fn kernel_supports_mycelium(&self, path: &Path) -> bool {
@@ -223,8 +260,12 @@ impl KernelManager {
             return caps.has_ipv6 && caps.has_tun;
         }
         let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
-        if name.contains("host") { return true; }
-        if name.contains("firecracker") { return false; }
+        if name.contains("host") {
+            return true;
+        }
+        if name.contains("firecracker") {
+            return false;
+        }
         true // Assume it works
     }
 }
@@ -240,11 +281,13 @@ fn extract_kernel_config(kernel_path: &Path) -> Option<HashMap<String, String>> 
     let magic_start = b"IKCFG_ST";
     let magic_end = b"IKCFG_ED";
 
-    let start = data.windows(magic_start.len())
+    let start = data
+        .windows(magic_start.len())
         .position(|w| w == magic_start)?
         + magic_start.len();
 
-    let end = data[start..].windows(magic_end.len())
+    let end = data[start..]
+        .windows(magic_end.len())
         .position(|w| w == magic_end)?
         + start;
 
@@ -294,11 +337,9 @@ fn extract_vmlinux(src: &str, dest: &Path) -> Result<()> {
         let version = String::from_utf8_lossy(&uname.stdout).trim().to_string();
         let script = format!("/usr/src/linux-headers-{version}/scripts/extract-vmlinux");
         if Path::new(&script).exists() {
-            let output = Command::new("bash")
-                .arg(&script)
-                .arg(src)
-                .output()?;
-            if output.status.success() && output.stdout.len() > 4 && output.stdout[..4] == elf_magic {
+            let output = Command::new("bash").arg(&script).arg(src).output()?;
+            if output.status.success() && output.stdout.len() > 4 && output.stdout[..4] == elf_magic
+            {
                 std::fs::write(dest, &output.stdout)?;
                 return Ok(());
             }
@@ -311,7 +352,10 @@ fn extract_vmlinux(src: &str, dest: &Path) -> Result<()> {
         if data[i] == gzip_magic[0] && data[i + 1] == gzip_magic[1] {
             let mut decoder = GzDecoder::new(&data[i..]);
             let mut decompressed = Vec::new();
-            if decoder.read_to_end(&mut decompressed).is_ok() && decompressed.len() > 4 && decompressed[..4] == elf_magic {
+            if decoder.read_to_end(&mut decompressed).is_ok()
+                && decompressed.len() > 4
+                && decompressed[..4] == elf_magic
+            {
                 std::fs::write(dest, &decompressed)?;
                 return Ok(());
             }
@@ -328,17 +372,25 @@ fn extract_vmlinux(src: &str, dest: &Path) -> Result<()> {
     for (tool, magic) in magic_bytes {
         for i in 0..data.len().saturating_sub(magic.len()) {
             if data[i..i + magic.len()] == **magic
-                && try_decompress_with_tool(&data[i..], dest, tool)? {
-                    return Ok(());
+                && try_decompress_with_tool(&data[i..], dest, tool)?
+            {
+                return Ok(());
             }
         }
     }
 
-    Err(ChvmError::KernelNotFound("could not extract vmlinux from kernel image".into()))
+    Err(ChvmError::KernelNotFound(
+        "could not extract vmlinux from kernel image".into(),
+    ))
 }
 
 fn try_decompress_with_tool(data: &[u8], dest: &Path, tool: &str) -> Result<bool> {
-    if Command::new("which").arg(tool).output().map(|o| o.status.success()).unwrap_or(false) {
+    if Command::new("which")
+        .arg(tool)
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false)
+    {
         let tmp = tempfile::NamedTempFile::new()?;
         std::fs::write(tmp.path(), data)?;
 

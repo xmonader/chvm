@@ -5,7 +5,13 @@ pub fn mount_essential() -> Result<(), Box<dyn std::error::Error>> {
         ("proc", "/proc", "proc", MsFlags::empty(), ""),
         ("sysfs", "/sys", "sysfs", MsFlags::empty(), ""),
         ("devtmpfs", "/dev", "devtmpfs", MsFlags::empty(), ""),
-        ("devpts", "/dev/pts", "devpts", MsFlags::empty(), "gid=5,mode=620"),
+        (
+            "devpts",
+            "/dev/pts",
+            "devpts",
+            MsFlags::empty(),
+            "gid=5,mode=620",
+        ),
         ("tmpfs", "/tmp", "tmpfs", MsFlags::empty(), ""),
         ("tmpfs", "/run", "tmpfs", MsFlags::empty(), ""),
     ];
@@ -42,9 +48,17 @@ pub fn mount_volumes() -> Result<(), Box<dyn std::error::Error>> {
                 if let Some((tag, target)) = m.split_once('=') {
                     println!("[init] Mounting volume {tag} at {target}");
                     let _ = std::fs::create_dir_all(target);
-                    match mount(Some(tag), target, Some("virtiofs"), MsFlags::empty(), None::<&str>) {
+                    match mount(
+                        Some(tag),
+                        target,
+                        Some("virtiofs"),
+                        MsFlags::empty(),
+                        None::<&str>,
+                    ) {
                         Ok(()) => {}
-                        Err(e) => eprintln!("[init] Warning: Failed to mount volume {tag} at {target}: {e}"),
+                        Err(e) => eprintln!(
+                            "[init] Warning: Failed to mount volume {tag} at {target}: {e}"
+                        ),
                     }
                 }
             }

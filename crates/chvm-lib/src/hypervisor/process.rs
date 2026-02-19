@@ -26,7 +26,11 @@ pub fn build_args(config: &VmConfig, vm_dir: &Path) -> Vec<String> {
     let mut args = Vec::new();
     push_arg(&mut args, "--api-socket", socket_path.to_string_lossy());
     push_arg(&mut args, "--cpus", format!("boot={}", config.vcpu));
-    push_arg(&mut args, "--memory", format!("size={}M,shared=on", config.memory_mb));
+    push_arg(
+        &mut args,
+        "--memory",
+        format!("size={}M,shared=on", config.memory_mb),
+    );
     push_arg(&mut args, "--kernel", &config.kernel.path);
     push_arg(&mut args, "--cmdline", &config.kernel.cmdline);
 
@@ -35,8 +39,16 @@ pub fn build_args(config: &VmConfig, vm_dir: &Path) -> Vec<String> {
     }
 
     match config.rootfs.rootfs_type {
-        RootfsType::VirtioFs => push_arg(&mut args, "--fs", format!("tag=rootfs,socket={}", config.rootfs.source)),
-        RootfsType::VirtioBlock => push_arg(&mut args, "--disk", format!("path={}", config.rootfs.source)),
+        RootfsType::VirtioFs => push_arg(
+            &mut args,
+            "--fs",
+            format!("tag=rootfs,socket={}", config.rootfs.source),
+        ),
+        RootfsType::VirtioBlock => push_arg(
+            &mut args,
+            "--disk",
+            format!("path={}", config.rootfs.source),
+        ),
     }
 
     push_arg(&mut args, "--console", format!("file={log_path}"));
@@ -53,13 +65,21 @@ pub fn build_args(config: &VmConfig, vm_dir: &Path) -> Vec<String> {
     for mount in &config.mounts {
         if mount.mount_type.as_deref() == Some("virtiofs") || mount.mount_type.is_none() {
             let tag = mount.tag.as_deref().unwrap_or(&mount.target);
-            push_arg(&mut args, "--fs", format!("tag={tag},socket={}", mount.source));
+            push_arg(
+                &mut args,
+                "--fs",
+                format!("tag={tag},socket={}", mount.source),
+            );
         }
     }
 
     if config.vsock_cid > 0 {
         let vsock_sock = vm_dir.join("vsock.sock");
-        push_arg(&mut args, "--vsock", format!("cid={},socket={}", config.vsock_cid, vsock_sock.display()));
+        push_arg(
+            &mut args,
+            "--vsock",
+            format!("cid={},socket={}", config.vsock_cid, vsock_sock.display()),
+        );
     }
 
     push_arg(&mut args, "--log-file", ch_log_path.to_string_lossy());
@@ -71,7 +91,7 @@ pub fn build_args(config: &VmConfig, vm_dir: &Path) -> Vec<String> {
 pub async fn launch(config: &VmConfig, vm_dir: &Path) -> Result<i32> {
     let ch_bin = find_ch_binary().ok_or_else(|| {
         ChvmError::HypervisorNotFound(
-            "cloud-hypervisor not found. Install it or set CHVM_CH_BIN env var.".into()
+            "cloud-hypervisor not found. Install it or set CHVM_CH_BIN env var.".into(),
         )
     })?;
 
@@ -81,7 +101,9 @@ pub async fn launch(config: &VmConfig, vm_dir: &Path) -> Result<i32> {
 
     let default_launch_log = vm_dir.join("console.log");
     let default_launch_log_str = default_launch_log.to_string_lossy();
-    let launch_log_path = config.log_path.as_deref()
+    let launch_log_path = config
+        .log_path
+        .as_deref()
         .unwrap_or(&default_launch_log_str);
     let log_file = std::fs::File::create(launch_log_path)?;
     let log_file2 = log_file.try_clone()?;
@@ -95,7 +117,9 @@ pub async fn launch(config: &VmConfig, vm_dir: &Path) -> Result<i32> {
         .map_err(|e| ChvmError::ProcessError(format!("failed to start cloud-hypervisor: {e}")))?;
 
     let pid = child.id().ok_or_else(|| {
-        ChvmError::ProcessError("cloud-hypervisor exited immediately before PID could be read".into())
+        ChvmError::ProcessError(
+            "cloud-hypervisor exited immediately before PID could be read".into(),
+        )
     })? as i32;
 
     // Spawn a background task to reap the child process (avoid zombie)
@@ -119,9 +143,10 @@ async fn wait_for_socket(path: &Path, timeout: Duration) -> Result<()> {
             Ok(_) => return Ok(()),
             Err(_) => {
                 if tokio::time::Instant::now() > deadline {
-                    return Err(ChvmError::ProcessError(
-                        format!("timeout waiting for API socket: {}", path.display())
-                    ));
+                    return Err(ChvmError::ProcessError(format!(
+                        "timeout waiting for API socket: {}",
+                        path.display()
+                    )));
                 }
                 tokio::time::sleep(Duration::from_millis(100)).await;
             }
@@ -137,8 +162,11 @@ pub fn find_ch_binary() -> Option<String> {
         }
     }
 
-    crate::utils::find_command("cloud-hypervisor", &[
-        "/usr/local/bin/cloud-hypervisor",
-        "/usr/bin/cloud-hypervisor",
-    ])
+    crate::utils::find_command(
+        "cloud-hypervisor",
+        &[
+            "/usr/local/bin/cloud-hypervisor",
+            "/usr/bin/cloud-hypervisor",
+        ],
+    )
 }

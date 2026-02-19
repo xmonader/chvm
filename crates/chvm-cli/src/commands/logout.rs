@@ -1,5 +1,5 @@
 use crate::cli::LogoutArgs;
-use chvm_lib::oci::{DockerConfig, docker_config_path};
+use chvm_lib::oci::{docker_config_path, DockerConfig};
 
 pub fn execute(args: &LogoutArgs) -> anyhow::Result<()> {
     let config_path = docker_config_path()

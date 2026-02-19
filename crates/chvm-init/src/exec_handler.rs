@@ -37,7 +37,10 @@ pub fn handle_exec(fd: i32) {
     let req: ExecRequest = match serde_json::from_str(&line) {
         Ok(r) => r,
         Err(e) => {
-            let resp = ExecResponse { exit_code: -1, error: Some(format!("invalid request: {e}")) };
+            let resp = ExecResponse {
+                exit_code: -1,
+                error: Some(format!("invalid request: {e}")),
+            };
             let _ = serde_json::to_writer(&mut writer, &resp);
             let _ = writer.write_all(b"\n");
             return;
@@ -45,7 +48,10 @@ pub fn handle_exec(fd: i32) {
     };
 
     if req.cmd.is_empty() {
-        let resp = ExecResponse { exit_code: -1, error: Some("no command specified".into()) };
+        let resp = ExecResponse {
+            exit_code: -1,
+            error: Some("no command specified".into()),
+        };
         let _ = serde_json::to_writer(&mut writer, &resp);
         let _ = writer.write_all(b"\n");
         return;
@@ -122,17 +128,22 @@ pub fn handle_exec(fd: i32) {
 
             let status = child.wait().ok();
             let exit_code = status.and_then(|s| s.code()).unwrap_or(1);
-            let resp = ExecResponse { exit_code, error: None };
+            let resp = ExecResponse {
+                exit_code,
+                error: None,
+            };
             let _ = serde_json::to_writer(&mut writer, &resp);
             let _ = writer.write_all(b"\n");
             let _ = writer.flush();
         }
         Err(e) => {
-            let resp = ExecResponse { exit_code: -1, error: Some(format!("failed to start: {e}")) };
+            let resp = ExecResponse {
+                exit_code: -1,
+                error: Some(format!("failed to start: {e}")),
+            };
             let _ = serde_json::to_writer(&mut writer, &resp);
             let _ = writer.write_all(b"\n");
             let _ = writer.flush();
         }
     }
 }
-

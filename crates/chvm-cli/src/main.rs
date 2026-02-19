@@ -22,9 +22,9 @@ async fn main() -> anyhow::Result<()> {
     };
 
     tracing_subscriber::fmt()
-        .with_env_filter(EnvFilter::try_from_default_env().unwrap_or_else(|_| {
-            EnvFilter::new(filter)
-        }))
+        .with_env_filter(
+            EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(filter)),
+        )
         .with_target(false)
         .without_time()
         .init();
@@ -62,8 +62,12 @@ async fn main() -> anyhow::Result<()> {
         Commands::Images(args) => commands::images::execute(&manager, args),
         Commands::Prune(args) => commands::prune::execute(&mut manager, args).await,
         // Already handled above
-        Commands::Version(_) | Commands::Doctor(_) | Commands::Setup(_) | Commands::Kernel(_)
-        | Commands::Login(_) | Commands::Logout(_) => {
+        Commands::Version(_)
+        | Commands::Doctor(_)
+        | Commands::Setup(_)
+        | Commands::Kernel(_)
+        | Commands::Login(_)
+        | Commands::Logout(_) => {
             unreachable!()
         }
     }

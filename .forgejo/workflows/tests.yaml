@@ -1,0 +1,75 @@
+name: Unit and Integration Test
+
+on:
+  push:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  test:
+    runs-on: docker
+    container:
+      image: ghcr.io/despiegk/builder:latest
+
+    defaults:
+      run:
+        shell: bash
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.ref }}
+
+      - name: Setup toolchain
+        run: |
+          set -e
+          source $HOME/.cargo/env || source /root/.cargo/env || true
+          export PATH="$HOME/.cargo/bin:/root/.cargo/bin:$PATH"
+          rustup target add x86_64-unknown-linux-musl || true
+
+      - name: Install system dependencies
+        run: |
+          apt-get update && apt-get install -y capnproto musl-tools expect
+
+      - name: Check formatting
+        run: |
+          set -e
+          source $HOME/.cargo/env || source /root/.cargo/env || true
+          export PATH="$HOME/.cargo/bin:/root/.cargo/bin:$PATH"
+          cargo fmt --all -- --check
+
+      - name: Clippy
+        run: |
+          set -e
+          source $HOME/.cargo/env || source /root/.cargo/env || true
+          export PATH="$HOME/.cargo/bin:/root/.cargo/bin:$PATH"
+          cargo clippy --workspace -- -D warnings
+
+      - name: Build project (including chvm-init with musl)
+        run: |
+          set -e
+          source $HOME/.cargo/env || source /root/.cargo/env || true
+          export PATH="$HOME/.cargo/bin:/root/.cargo/bin:$PATH"
+          make build
+
+      - name: Run unit tests
+        run: |
+          set -e
+          source $HOME/.cargo/env || source /root/.cargo/env || true
+          export PATH="$HOME/.cargo/bin:/root/.cargo/bin:$PATH"
+          make unit-test
+        env:
+          RUST_MIN_STACK: 8388608
+
+      - name: Run integration tests
+        run: |
+          set -e
+          source $HOME/.cargo/env || source /root/.cargo/env || true
+          export PATH="$HOME/.cargo/bin:/root/.cargo/bin:$PATH"
+          # Integration tests require root and KVM - run what we can
+          bash tests/01_build.sh || true
+          bash tests/02_cli_basics.sh || true
+        continue-on-error: true

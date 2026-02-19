@@ -1,4 +1,4 @@
-use crate::utils::{run_cmd, run_best_effort};
+use crate::utils::{run_best_effort, run_cmd};
 
 /// Create a network namespace.
 pub fn create_netns(name: &str) -> anyhow::Result<()> {
@@ -13,7 +13,10 @@ pub fn delete_netns(name: &str) -> anyhow::Result<()> {
 
 /// Create a veth pair.
 pub fn create_veth(name: &str, peer: &str) -> anyhow::Result<()> {
-    run_cmd("ip", &["link", "add", name, "type", "veth", "peer", "name", peer])
+    run_cmd(
+        "ip",
+        &["link", "add", name, "type", "veth", "peer", "name", peer],
+    )
 }
 
 /// Move an interface into a network namespace.

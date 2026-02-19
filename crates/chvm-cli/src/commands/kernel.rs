@@ -15,8 +15,10 @@ pub fn execute(args: &KernelArgs) -> anyhow::Result<()> {
                 return Ok(());
             }
 
-            println!("{:<30} {:<12} {:<10} {:<30}",
-                "NAME", "SIZE", "DEFAULT", "SYMLINK TARGET");
+            println!(
+                "{:<30} {:<12} {:<10} {:<30}",
+                "NAME", "SIZE", "DEFAULT", "SYMLINK TARGET"
+            );
 
             let default = paths.kernels.join("vmlinux");
             let default_target = std::fs::read_link(&default).ok();
@@ -24,14 +26,21 @@ pub fn execute(args: &KernelArgs) -> anyhow::Result<()> {
             for k in &kernels {
                 let size = format!("{}MB", k.size / 1_048_576);
                 let is_default = if k.name == "vmlinux"
-                    || default_target.as_ref().map(|t| t.to_string_lossy().as_ref() == k.name).unwrap_or(false) {
+                    || default_target
+                        .as_ref()
+                        .map(|t| t.to_string_lossy().as_ref() == k.name)
+                        .unwrap_or(false)
+                {
                     "*"
                 } else {
                     ""
                 };
                 let target = k.symlink_target.as_deref().unwrap_or("-");
 
-                println!("{:<30} {:<12} {:<10} {:<30}", k.name, size, is_default, target);
+                println!(
+                    "{:<30} {:<12} {:<10} {:<30}",
+                    k.name, size, is_default, target
+                );
             }
         }
 
@@ -61,7 +70,9 @@ pub fn execute(args: &KernelArgs) -> anyhow::Result<()> {
         }
 
         KernelCommands::Check(check_args) => {
-            let kernel_path = check_args.path.as_deref()
+            let kernel_path = check_args
+                .path
+                .as_deref()
                 .map(std::path::PathBuf::from)
                 .unwrap_or_else(|| paths.kernels.join("vmlinux"));
 
@@ -73,11 +84,26 @@ pub fn execute(args: &KernelArgs) -> anyhow::Result<()> {
             match kernel_mgr.detect_capabilities(&kernel_path) {
                 Some(caps) => {
                     println!("Kernel: {}", kernel_path.display());
-                    println!("  IPv6:         {}", if caps.has_ipv6 { "yes" } else { "no" });
-                    println!("  TUN:          {}", if caps.has_tun { "yes" } else { "no" });
-                    println!("  VirtioFS:     {}", if caps.has_virtiofs { "yes" } else { "no" });
-                    println!("  VirtioBlock:  {}", if caps.has_virtio_block { "yes" } else { "no" });
-                    println!("  Vsock:        {}", if caps.has_vsock { "yes" } else { "no" });
+                    println!(
+                        "  IPv6:         {}",
+                        if caps.has_ipv6 { "yes" } else { "no" }
+                    );
+                    println!(
+                        "  TUN:          {}",
+                        if caps.has_tun { "yes" } else { "no" }
+                    );
+                    println!(
+                        "  VirtioFS:     {}",
+                        if caps.has_virtiofs { "yes" } else { "no" }
+                    );
+                    println!(
+                        "  VirtioBlock:  {}",
+                        if caps.has_virtio_block { "yes" } else { "no" }
+                    );
+                    println!(
+                        "  Vsock:        {}",
+                        if caps.has_vsock { "yes" } else { "no" }
+                    );
 
                     if caps.has_ipv6 && caps.has_tun {
                         println!("\n  Mycelium support: yes");
@@ -86,7 +112,10 @@ pub fn execute(args: &KernelArgs) -> anyhow::Result<()> {
                     }
                 }
                 None => {
-                    println!("Could not detect kernel capabilities for {}", kernel_path.display());
+                    println!(
+                        "Could not detect kernel capabilities for {}",
+                        kernel_path.display()
+                    );
                     println!("The kernel config may not be embedded.");
                 }
             }

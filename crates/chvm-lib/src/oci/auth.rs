@@ -7,13 +7,17 @@ use tracing::{debug, warn};
 
 /// Credentials for authenticating with an OCI registry.
 /// Either anonymous or basic auth (username + password together).
-#[derive(Debug, Clone)]
+#[derive(Default, Debug, Clone)]
 pub enum RegistryCredentials {
+    #[default]
     Anonymous,
-    Basic { username: String, password: String },
+    Basic {
+        username: String,
+        password: String,
+    },
 }
 
-impl Default for RegistryCredentials {
+impl RegistryCredentials {
     fn default() -> Self {
         Self::Anonymous
     }
@@ -56,7 +60,10 @@ impl RegistryCredentials {
 /// Falls back to anonymous if no config or no matching entry is found.
 pub fn resolve_credentials(registry: &str) -> RegistryCredentials {
     let Some(config_path) = find_docker_config() else {
-        debug!(registry = registry, "No Docker config found, using anonymous access");
+        debug!(
+            registry = registry,
+            "No Docker config found, using anonymous access"
+        );
         return RegistryCredentials::default();
     };
 
@@ -75,7 +82,10 @@ pub fn resolve_credentials(registry: &str) -> RegistryCredentials {
         return creds;
     }
 
-    debug!(registry = registry, "No credentials found, using anonymous access");
+    debug!(
+        registry = registry,
+        "No credentials found, using anonymous access"
+    );
     RegistryCredentials::default()
 }
 
@@ -172,14 +182,10 @@ impl DockerConfig {
 
     /// Set credentials in the auths section for a registry.
     pub fn set_auth(&mut self, registry: &str, username: &str, password: &str) {
-        let token = base64::engine::general_purpose::STANDARD
-            .encode(format!("{}:{}", username, password));
-        self.auths.insert(
-            registry.to_string(),
-            AuthEntry {
-                auth: Some(token),
-            },
-        );
+        let token =
+            base64::engine::general_purpose::STANDARD.encode(format!("{}:{}", username, password));
+        self.auths
+            .insert(registry.to_string(), AuthEntry { auth: Some(token) });
     }
 
     /// Remove credentials for a registry from the auths section.
@@ -190,23 +196,30 @@ impl DockerConfig {
 
 /// Decode a base64 "auth" field (format: "username:password") into RegistryCredentials.
 fn entry_to_credentials(entry: &AuthEntry) -> Result<RegistryCredentials, anyhow::Error> {
-    let auth = entry.auth.as_deref().ok_or_else(|| anyhow::anyhow!("No auth field found"))?;
-    
+    let auth = entry
+        .auth
+        .as_deref()
+        .ok_or_else(|| anyhow::anyhow!("No auth field found"))?;
+
     let decoded = base64::engine::general_purpose::STANDARD
         .decode(auth)
         .map_err(|e| anyhow::anyhow!("Invalid base64 encoding: {}", e))?;
-    
+
     let decoded_str = String::from_utf8(decoded)
         .map_err(|e| anyhow::anyhow!("Invalid UTF-8 in decoded auth: {}", e))?;
-    
-    let (user, pass) = decoded_str.split_once(':')
+
+    let (user, pass) = decoded_str
+        .split_once(':')
         .ok_or_else(|| anyhow::anyhow!("Auth field missing ':' separator"))?;
 
     if user.is_empty() || pass.is_empty() {
         return Err(anyhow::anyhow!("Username or password cannot be empty"));
     }
 
-    Ok(RegistryCredentials::basic(user.to_string(), pass.to_string()))
+    Ok(RegistryCredentials::basic(
+        user.to_string(),
+        pass.to_string(),
+    ))
 }
 
 /// Extract the registry hostname from an image reference.
@@ -227,9 +240,7 @@ pub fn registry_from_image_ref(image_ref: &str) -> String {
 
 /// Get the default Docker config.json path.
 pub fn docker_config_path() -> Option<PathBuf> {
-    find_docker_config().or_else(|| {
-        dirs::home_dir().map(|h| h.join(".docker").join("config.json"))
-    })
+    find_docker_config().or_else(|| dirs::home_dir().map(|h| h.join(".docker").join("config.json")))
 }
 
 #[cfg(test)]
@@ -259,10 +270,19 @@ mod tests {
     #[test]
     fn test_registry_from_image_ref() {
         assert_eq!(registry_from_image_ref("alpine:latest"), "docker.io");
-        assert_eq!(registry_from_image_ref("library/alpine:latest"), "docker.io");
-        assert_eq!(registry_from_image_ref("docker.io/library/alpine:latest"), "docker.io");
+        assert_eq!(
+            registry_from_image_ref("library/alpine:latest"),
+            "docker.io"
+        );
+        assert_eq!(
+            registry_from_image_ref("docker.io/library/alpine:latest"),
+            "docker.io"
+        );
         assert_eq!(registry_from_image_ref("ghcr.io/user/repo:v1"), "ghcr.io");
-        assert_eq!(registry_from_image_ref("myregistry.com:5000/repo"), "myregistry.com:5000");
+        assert_eq!(
+            registry_from_image_ref("myregistry.com:5000/repo"),
+            "myregistry.com:5000"
+        );
     }
 
     #[test]

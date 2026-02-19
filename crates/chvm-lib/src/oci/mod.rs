@@ -7,8 +7,8 @@ pub mod pull;
 pub mod registry;
 
 pub use auth::{
-    DockerConfig, RegistryCredentials, docker_config_path, registry_from_image_ref,
-    resolve_credentials,
+    docker_config_path, registry_from_image_ref, resolve_credentials, DockerConfig,
+    RegistryCredentials,
 };
 pub use cache::{CachedImage, ImageCache};
 pub use image_config::ImageConfig;

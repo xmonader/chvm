@@ -5,7 +5,7 @@ use tracing::info;
 
 use crate::network::bridge;
 use crate::network::traits::*;
-use crate::utils::{run_cmd, run_best_effort};
+use crate::utils::{run_best_effort, run_cmd};
 use crate::vm::state::PortForward;
 
 const DEFAULT_BRIDGE: &str = "chvm0";
@@ -20,7 +20,10 @@ impl NetworkBackend for TapNetwork {
     }
 
     async fn setup(&self, config: &SetupConfig) -> anyhow::Result<NetworkResult> {
-        let tap_device = format!("tap-{}", &config.vm_id[..std::cmp::min(8, config.vm_id.len())]);
+        let tap_device = format!(
+            "tap-{}",
+            &config.vm_id[..std::cmp::min(8, config.vm_id.len())]
+        );
         let bridge_name = config.bridge.as_deref().unwrap_or(DEFAULT_BRIDGE);
 
         // Create TAP device
@@ -70,7 +73,10 @@ impl NetworkBackend for TapNetwork {
         }
 
         // Delete TAP device
-        let tap_device = format!("tap-{}", &config.vm_id[..std::cmp::min(8, config.vm_id.len())]);
+        let tap_device = format!(
+            "tap-{}",
+            &config.vm_id[..std::cmp::min(8, config.vm_id.len())]
+        );
         run_best_effort("ip", &["link", "delete", &tap_device], "delete TAP device");
         Ok(())
     }
@@ -154,38 +160,92 @@ fn get_bridge_devices(bridge: &str) -> HashSet<String> {
 }
 
 fn setup_port_forwards(vm_ip: &str, forwards: &[PortForward]) {
-    run_best_effort("sh", &["-c", "echo 1 > /proc/sys/net/ipv4/conf/all/route_localnet"], "enable route_localnet");
+    run_best_effort(
+        "sh",
+        &["-c", "echo 1 > /proc/sys/net/ipv4/conf/all/route_localnet"],
+        "enable route_localnet",
+    );
 
     let ip = vm_ip.split('/').next().unwrap_or(vm_ip);
 
     for pf in forwards {
-        let proto = if pf.protocol.is_empty() { "tcp" } else { &pf.protocol };
+        let proto = if pf.protocol.is_empty() {
+            "tcp"
+        } else {
+            &pf.protocol
+        };
         let host_port = pf.host_port.to_string();
         let guest_port = pf.guest_port.to_string();
         let dest = format!("{}:{}", ip, pf.guest_port);
 
         // DNAT for incoming traffic
-        run_best_effort("iptables", &[
-            "-t", "nat", "-I", "PREROUTING", "1",
-            "-p", proto, "--dport", &host_port,
-            "-j", "DNAT", "--to-destination", &dest,
-        ], "PREROUTING DNAT rule");
+        run_best_effort(
+            "iptables",
+            &[
+                "-t",
+                "nat",
+                "-I",
+                "PREROUTING",
+                "1",
+                "-p",
+                proto,
+                "--dport",
+                &host_port,
+                "-j",
+                "DNAT",
+                "--to-destination",
+                &dest,
+            ],
+            "PREROUTING DNAT rule",
+        );
 
         // DNAT for localhost access
-        run_best_effort("iptables", &[
-            "-t", "nat", "-A", "OUTPUT",
-            "-p", proto, "-d", "127.0.0.1", "--dport", &host_port,
-            "-j", "DNAT", "--to-destination", &dest,
-        ], "OUTPUT DNAT rule");
+        run_best_effort(
+            "iptables",
+            &[
+                "-t",
+                "nat",
+                "-A",
+                "OUTPUT",
+                "-p",
+                proto,
+                "-d",
+                "127.0.0.1",
+                "--dport",
+                &host_port,
+                "-j",
+                "DNAT",
+                "--to-destination",
+                &dest,
+            ],
+            "OUTPUT DNAT rule",
+        );
 
         // MASQUERADE for hairpin NAT
-        run_best_effort("iptables", &[
-            "-t", "nat", "-A", "POSTROUTING",
-            "-p", proto, "-d", ip, "--dport", &guest_port,
-            "-j", "MASQUERADE",
-        ], "POSTROUTING MASQUERADE rule");
+        run_best_effort(
+            "iptables",
+            &[
+                "-t",
+                "nat",
+                "-A",
+                "POSTROUTING",
+                "-p",
+                proto,
+                "-d",
+                ip,
+                "--dport",
+                &guest_port,
+                "-j",
+                "MASQUERADE",
+            ],
+            "POSTROUTING MASQUERADE rule",
+        );
 
-        info!(host_port = pf.host_port, guest_port = pf.guest_port, "Port forward configured");
+        info!(
+            host_port = pf.host_port,
+            guest_port = pf.guest_port,
+            "Port forward configured"
+        );
     }
 }
 
@@ -193,27 +253,123 @@ fn remove_port_forwards(vm_ip: &str, forwards: &[PortForward]) {
     let ip = vm_ip.split('/').next().unwrap_or(vm_ip);
 
     for pf in forwards {
-        let proto = if pf.protocol.is_empty() { "tcp" } else { &pf.protocol };
+        let proto = if pf.protocol.is_empty() {
+            "tcp"
+        } else {
+            &pf.protocol
+        };
         let host_port = pf.host_port.to_string();
         let guest_port = pf.guest_port.to_string();
         let dest = format!("{}:{}", ip, pf.guest_port);
 
-        run_best_effort("iptables", &[
-            "-t", "nat", "-D", "PREROUTING",
-            "-p", proto, "--dport", &host_port,
-            "-j", "DNAT", "--to-destination", &dest,
-        ], "remove PREROUTING DNAT rule");
+        run_best_effort(
+            "iptables",
+            &[
+                "-t",
+                "nat",
+                "-D",
+                "PREROUTING",
+                "-p",
+                proto,
+                "--dport",
+                &host_port,
+                "-j",
+                "DNAT",
+                "--to-destination",
+                &dest,
+            ],
+            "remove PREROUTING DNAT rule",
+        );
 
-        run_best_effort("iptables", &[
-            "-t", "nat", "-D", "OUTPUT",
-            "-p", proto, "-d", "127.0.0.1", "--dport", &host_port,
-            "-j", "DNAT", "--to-destination", &dest,
-        ], "remove OUTPUT DNAT rule");
+        run_best_effort(
+            "iptables",
+            &[
+                "-t",
+                "nat",
+                "-D",
+                "OUTPUT",
+                "-p",
+                proto,
+                "-d",
+                "127.0.0.1",
+                "--dport",
+                &host_port,
+                "-j",
+                "DNAT",
+                "--to-destination",
+                &dest,
+            ],
+            "remove OUTPUT DNAT rule",
+        );
 
-        run_best_effort("iptables", &[
-            "-t", "nat", "-D", "POSTROUTING",
-            "-p", proto, "-d", ip, "--dport", &guest_port,
-            "-j", "MASQUERADE",
-        ], "remove POSTROUTING MASQUERADE rule");
+        run_best_effort(
+            "iptables",
+            &[
+                "-t",
+                "nat",
+                "-D",
+                "POSTROUTING",
+                "-p",
+                proto,
+                "-d",
+                ip,
+                "--dport",
+                &guest_port,
+                "-j",
+                "MASQUERADE",
+            ],
+            "remove POSTROUTING MASQUERADE rule",
+        );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_find_unused_ip_empty_bridge() {
+        let used = HashSet::new();
+        let mut used_with_gateway = used.clone();
+        used_with_gateway.insert(1);
+
+        let ip = find_unused_ip("nonexistent-bridge");
+        assert!(ip >= 2 && ip < 255);
+    }
+
+    #[test]
+    fn test_get_used_ips_includes_gateway() {
+        let used = get_used_ips("nonexistent-bridge");
+        assert!(
+            used.contains(&1),
+            "Gateway IP (.1) should always be marked as used"
+        );
+    }
+
+    #[test]
+    fn test_tap_device_name_format() {
+        let vm_id = "test-vm-123456789";
+        let expected = "tap-test-vm-";
+        let tap_name = format!("tap-{}", &vm_id[..std::cmp::min(8, vm_id.len())]);
+        assert!(tap_name.starts_with(expected));
+        assert_eq!(tap_name, "tap-test-vm-");
+    }
+
+    #[test]
+    fn test_tap_device_name_short_id() {
+        let vm_id = "short";
+        let tap_name = format!("tap-{}", &vm_id[..std::cmp::min(8, vm_id.len())]);
+        assert_eq!(tap_name, "tap-short");
+    }
+
+    #[test]
+    fn test_tap_network_backend_name() {
+        let tap = TapNetwork;
+        assert_eq!(tap.name(), "tap");
+    }
+
+    #[test]
+    fn test_default_bridge_constant() {
+        assert_eq!(DEFAULT_BRIDGE, "chvm0");
     }
 }

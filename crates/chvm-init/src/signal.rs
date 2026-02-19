@@ -7,18 +7,17 @@ pub fn reap_zombies() {
     // Block SIGCHLD so we can wait for it with sigwait
     let mut mask = nix::sys::signal::SigSet::empty();
     mask.add(nix::sys::signal::Signal::SIGCHLD);
-    let _ = nix::sys::signal::sigprocmask(
-        nix::sys::signal::SigmaskHow::SIG_BLOCK,
-        Some(&mask),
-        None,
-    );
+    let _ =
+        nix::sys::signal::sigprocmask(nix::sys::signal::SigmaskHow::SIG_BLOCK, Some(&mask), None);
 
     loop {
         // Wait for SIGCHLD signal
         let _ = mask.wait();
 
         // Reap all available children (there may be multiple)
-        while let Ok(WaitStatus::Exited(pid, _)) | Ok(WaitStatus::Signaled(pid, _, _)) = waitpid(Pid::from_raw(-1), Some(WaitPidFlag::WNOHANG)) {
+        while let Ok(WaitStatus::Exited(pid, _)) | Ok(WaitStatus::Signaled(pid, _, _)) =
+            waitpid(Pid::from_raw(-1), Some(WaitPidFlag::WNOHANG))
+        {
             println!("[init] Reaped child process {pid}");
         }
     }
@@ -29,7 +28,9 @@ pub fn poweroff(exit_code: i32) -> ! {
     println!("[init] Powering off (exit code: {exit_code})...");
 
     // Sync filesystems
-    unsafe { libc::sync(); }
+    unsafe {
+        libc::sync();
+    }
 
     // Unmount in reverse order
     for path in &["/mnt", "/run", "/tmp", "/dev/pts"] {
@@ -37,7 +38,10 @@ pub fn poweroff(exit_code: i32) -> ! {
     }
 
     // Try ACPI poweroff
-    if let Ok(mut f) = std::fs::OpenOptions::new().write(true).open("/sys/power/state") {
+    if let Ok(mut f) = std::fs::OpenOptions::new()
+        .write(true)
+        .open("/sys/power/state")
+    {
         use std::io::Write;
         println!("[init] Triggering ACPI poweroff...");
         let _ = f.write_all(b"poweroff");
@@ -45,7 +49,10 @@ pub fn poweroff(exit_code: i32) -> ! {
     }
 
     // Try sysrq poweroff
-    if let Ok(mut f) = std::fs::OpenOptions::new().write(true).open("/proc/sysrq-trigger") {
+    if let Ok(mut f) = std::fs::OpenOptions::new()
+        .write(true)
+        .open("/proc/sysrq-trigger")
+    {
         use std::io::Write;
         println!("[init] Triggering sysrq poweroff...");
         let _ = f.write_all(b"o");
@@ -66,6 +73,8 @@ pub fn poweroff(exit_code: i32) -> ! {
     // Should not reach here
     println!("[init] Power off failed, halting...");
     loop {
-        unsafe { libc::pause(); }
+        unsafe {
+            libc::pause();
+        }
     }
 }

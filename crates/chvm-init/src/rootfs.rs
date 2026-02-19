@@ -1,4 +1,4 @@
-use nix::mount::{mount, MsFlags, MntFlags};
+use nix::mount::{mount, MntFlags, MsFlags};
 
 pub fn mount_rootfs() -> Result<(), Box<dyn std::error::Error>> {
     let cmdline = std::fs::read_to_string("/proc/cmdline").unwrap_or_default();

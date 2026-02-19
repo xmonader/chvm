@@ -1,7 +1,7 @@
 use std::io::{self, BufRead, Write};
 
 use crate::cli::LoginArgs;
-use chvm_lib::oci::{DockerConfig, docker_config_path};
+use chvm_lib::oci::{docker_config_path, DockerConfig};
 
 pub fn execute(args: &LoginArgs) -> anyhow::Result<()> {
     let username = match &args.username {

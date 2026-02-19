@@ -25,12 +25,39 @@ chvm lets you pull OCI container images and run them as hardware-isolated virtua
 - Root privileges (or `doas`/`sudo`) for VM operations
 - `mkfs.ext4`, `iptables`, `ip` (iproute2)
 
+## Installation
+
+### From Source
+
+```bash
+git clone https://github.com/geomind/chvm.git
+cd chvm
+
+# Install musl target (one-time)
+rustup target add x86_64-unknown-linux-musl
+
+# Build everything (host CLI + statically-linked guest init)
+make build
+
+# Binary is at ./target/release/chvm
+# Optionally install system-wide:
+sudo cp target/release/chvm /usr/local/bin/
+sudo cp target/release/chvm-init /usr/local/bin/
+```
+
+### System Setup
+
+```bash
+# Check what's needed
+chvm doctor
+
+# Setup kernel and network bridge
+sudo chvm setup
+```
+
 ## Quick Start
 
 ```bash
-# Build (requires musl target: rustup target add x86_64-unknown-linux-musl)
-make build
-
 # Check system readiness
 chvm doctor
 
@@ -54,46 +81,17 @@ sudo chvm stop myvm
 sudo chvm rm myvm
 ```
 
-## Installation
-
-### From Source
-
-```bash
-git clone https://github.com/geomind/chvm.git
-cd chvm
-
-# Install musl target (one-time)
-rustup target add x86_64-unknown-linux-musl
-
-# Build everything (host CLI + statically-linked guest init)
-make build
-
-# Binary is at ./target/release/chvm
-# Optionally install system-wide:
-sudo cp target/release/chvm /usr/local/bin/
-```
-
-### System Setup
-
-```bash
-# Check what's needed
-chvm doctor
-
-# Setup kernel and network bridge
-sudo chvm setup
-```
-
 ## Usage
 
 ### Images
 
 ```bash
 # Pull from Docker Hub
-chvm pull alpine:latest
-chvm pull ubuntu:22.04
+sudo chvm pull alpine:latest
+sudo chvm pull ubuntu:22.04
 
 # Pull from other registries
-chvm pull ghcr.io/user/repo:v1
+sudo chvm pull ghcr.io/user/repo:v1
 
 # List cached images
 chvm images
