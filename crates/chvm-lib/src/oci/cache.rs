@@ -41,9 +41,14 @@ pub struct ImageCache {
 impl ImageCache {
     pub fn new(cache_dir: &Path) -> Result<Self> {
         std::fs::create_dir_all(cache_dir)?;
-        let index = load_index(cache_dir).unwrap_or_else(|_| CacheIndex {
-            images: HashMap::new(),
-        });
+        let index_path = cache_dir.join("index.json");
+        let index = if index_path.exists() {
+            load_index(cache_dir)?
+        } else {
+            CacheIndex {
+                images: HashMap::new(),
+            }
+        };
         Ok(Self {
             cache_dir: cache_dir.to_path_buf(),
             index,
@@ -55,9 +60,14 @@ impl ImageCache {
     }
 
     fn reload_index(&mut self) -> Result<()> {
-        self.index = load_index(&self.cache_dir).unwrap_or_else(|_| CacheIndex {
-            images: HashMap::new(),
-        });
+        let path = self.index_path();
+        if !path.exists() {
+            self.index = CacheIndex {
+                images: HashMap::new(),
+            };
+            return Ok(());
+        }
+        self.index = load_index(&self.cache_dir)?;
         Ok(())
     }
 
@@ -109,11 +119,13 @@ impl ImageCache {
     pub fn get(&self, reference: &str) -> Result<CachedImage> {
         let _lock = FileLock::shared(&self.index_path())?;
 
+        // Try by digest
         let digest = sanitize_digest(reference);
         if let Some(img) = self.index.images.get(&digest) {
             return Ok(img.clone());
         }
 
+        // Try by reference
         let normalized = crate::oci::registry::normalize_reference(reference);
         for img in self.index.images.values() {
             if img.refs.contains(&normalized) || img.refs.iter().any(|r| r == reference) {
@@ -145,6 +157,7 @@ impl ImageCache {
             return Ok(());
         }
 
+        // Try by reference
         let to_remove: Option<String> = self
             .index
             .images
@@ -167,6 +180,7 @@ impl ImageCache {
         }
     }
 
+    /// Ensure rootfs is extracted, returning the path.
     pub fn ensure_rootfs(&mut self, cached: &CachedImage) -> Result<String> {
         if let Some(ref rootfs) = cached.rootfs_path {
             if Path::new(rootfs).exists() {
@@ -206,7 +220,7 @@ impl ImageCache {
     }
 }
 
-fn load_index(cache_dir: &Path) -> anyhow::Result<CacheIndex> {
+fn load_index(cache_dir: &Path) -> Result<CacheIndex> {
     let path = cache_dir.join("index.json");
     let data = std::fs::read_to_string(path)?;
     Ok(serde_json::from_str(&data)?)

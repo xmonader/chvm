@@ -25,8 +25,8 @@ impl FileLock {
             .truncate(false)
             .open(&lock_path)?;
 
-        let flock = Flock::lock(file, FlockArg::LockExclusive)
-            .map_err(|e| std::io::Error::other(e.1))?;
+        let flock =
+            Flock::lock(file, FlockArg::LockExclusive).map_err(|e| std::io::Error::other(e.1))?;
 
         Ok(Self {
             _flock: flock,
@@ -46,8 +46,8 @@ impl FileLock {
             .truncate(false)
             .open(&lock_path)?;
 
-        let flock = Flock::lock(file, FlockArg::LockShared)
-            .map_err(|e| std::io::Error::other(e.1))?;
+        let flock =
+            Flock::lock(file, FlockArg::LockShared).map_err(|e| std::io::Error::other(e.1))?;
 
         Ok(Self {
             _flock: flock,
@@ -55,28 +55,7 @@ impl FileLock {
         })
     }
 
-    /// Try to acquire an exclusive lock without blocking.
-    /// Returns None if the lock is held by another process.
-    pub fn try_exclusive(path: &Path) -> std::io::Result<Option<Self>> {
-        let lock_path = path.with_extension("lock");
-        let file = File::options()
-            .read(true)
-            .write(true)
-            .create(true)
-            .truncate(false)
-            .open(&lock_path)?;
-
-        match Flock::lock(file, FlockArg::LockExclusiveNonblock) {
-            Ok(flock) => Ok(Some(Self {
-                _flock: flock,
-                path: lock_path,
-            })),
-            Err((_, nix::errno::Errno::EWOULDBLOCK)) => Ok(None),
-            Err((_, e)) => Err(std::io::Error::other(e)),
-        }
-    }
-
-    /// Get the path to the lock file.
+    /// Get the path of the lock file.
     pub fn path(&self) -> &Path {
         &self.path
     }
@@ -307,22 +286,6 @@ mod tests {
 
         let lock2 = FileLock::shared(&test_file);
         assert!(lock2.is_ok());
-    }
-
-    #[test]
-    fn test_file_lock_try_exclusive_when_held() {
-        use tempfile::TempDir;
-
-        let temp_dir = TempDir::new().unwrap();
-        let test_file = temp_dir.path().join("test.json");
-        std::fs::write(&test_file, "{}").unwrap();
-
-        // Acquire exclusive lock
-        let _lock = FileLock::exclusive(&test_file).unwrap();
-
-        // Try to acquire another exclusive lock - should fail (return None)
-        let try_lock = FileLock::try_exclusive(&test_file).unwrap();
-        assert!(try_lock.is_none());
     }
 
     #[test]

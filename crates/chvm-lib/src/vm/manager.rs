@@ -74,9 +74,8 @@ impl StateStore {
     }
 
     fn reload_state(&mut self, vm_id: &str) -> Result<()> {
-        if let Ok(state) = self.load_state(vm_id) {
-            self.states.insert(vm_id.to_string(), state);
-        }
+        let state = self.load_state(vm_id)?;
+        self.states.insert(vm_id.to_string(), state);
         Ok(())
     }
 
