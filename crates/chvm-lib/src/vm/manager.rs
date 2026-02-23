@@ -5,6 +5,7 @@ use chrono::Utc;
 use tracing::{debug, info, warn};
 
 use crate::config::Config;
+use crate::utils::{atomic_write, FileLock};
 
 /// Maximum retries when probing for mycelium IPv6 address after VM boot.
 const MYCELIUM_PROBE_MAX_RETRIES: usize = 10;
@@ -66,15 +67,28 @@ impl StateStore {
     }
 
     fn load_state(&self, vm_id: &str) -> Result<RuntimeState> {
-        let data = std::fs::read_to_string(self.state_path(vm_id))?;
+        let state_path = self.state_path(vm_id);
+        let _lock = FileLock::shared(&state_path)?;
+        let data = std::fs::read_to_string(&state_path)?;
         Ok(serde_json::from_str(&data)?)
+    }
+
+    fn reload_state(&mut self, vm_id: &str) -> Result<()> {
+        if let Ok(state) = self.load_state(vm_id) {
+            self.states.insert(vm_id.to_string(), state);
+        }
+        Ok(())
     }
 
     pub fn save(&mut self, state: &RuntimeState) -> Result<()> {
         let vm_dir = self.vm_dir(&state.id);
         std::fs::create_dir_all(&vm_dir)?;
+
+        let state_path = self.state_path(&state.id);
+        let _lock = FileLock::exclusive(&state_path)?;
+
         let data = serde_json::to_string_pretty(state)?;
-        std::fs::write(self.state_path(&state.id), data)?;
+        atomic_write(&state_path, data.as_bytes())?;
         self.states.insert(state.id.clone(), state.clone());
         Ok(())
     }
@@ -99,8 +113,14 @@ impl StateStore {
     }
 
     /// Resolve a VM by ID or name, returning a mutable clone.
-    pub fn resolve_clone(&self, id_or_name: &str) -> Result<RuntimeState> {
-        self.resolve(id_or_name).cloned()
+    /// This also reloads the state from disk to get the latest version.
+    pub fn resolve_clone(&mut self, id_or_name: &str) -> Result<RuntimeState> {
+        let vm_id = self.resolve(id_or_name)?.id.clone();
+        self.reload_state(&vm_id)?;
+        self.states
+            .get(&vm_id)
+            .cloned()
+            .ok_or_else(|| ChvmError::VmNotFound(id_or_name.to_string()))
     }
 
     pub fn list(&self) -> Vec<&RuntimeState> {
@@ -121,13 +141,18 @@ impl StateStore {
     }
 
     pub fn update_status(&mut self, vm_id: &str, status: VmState) -> Result<()> {
+        let state_path = self.state_path(vm_id);
+        let _lock = FileLock::exclusive(&state_path)?;
+
+        self.reload_state(vm_id)?;
+
         let state = self
             .states
             .get_mut(vm_id)
             .ok_or_else(|| ChvmError::VmNotFound(vm_id.to_string()))?;
         state.status = status;
         let data = serde_json::to_string_pretty(state)?;
-        std::fs::write(self.state_path(vm_id), data)?;
+        atomic_write(&state_path, data.as_bytes())?;
         Ok(())
     }
 }
@@ -400,7 +425,7 @@ impl VmManager {
     }
 
     /// Get a specific VM by ID or name.
-    pub fn get(&self, id_or_name: &str) -> Result<RuntimeState> {
+    pub fn get(&mut self, id_or_name: &str) -> Result<RuntimeState> {
         self.state_store.resolve_clone(id_or_name)
     }
 
