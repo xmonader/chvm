@@ -84,7 +84,10 @@ pub fn handle_shell(fd: i32) {
 
 fn open_pty() -> Result<(std::fs::File, std::fs::File), Box<dyn std::error::Error>> {
     unsafe {
-        let master_fd = libc::open(c"/dev/ptmx".as_ptr(), libc::O_RDWR | libc::O_NOCTTY);
+        let master_fd = libc::open(
+            c"/dev/ptmx".as_ptr(),
+            libc::O_RDWR | libc::O_NOCTTY | libc::O_CLOEXEC,
+        );
         if master_fd < 0 {
             return Err(format!("open /dev/ptmx: {}", std::io::Error::last_os_error()).into());
         }
@@ -104,7 +107,10 @@ fn open_pty() -> Result<(std::fs::File, std::fs::File), Box<dyn std::error::Erro
         }
 
         let slave_path = format!("/dev/pts/{pts_num}\0");
-        let slave_fd = libc::open(slave_path.as_ptr() as _, libc::O_RDWR | libc::O_NOCTTY);
+        let slave_fd = libc::open(
+            slave_path.as_ptr() as _,
+            libc::O_RDWR | libc::O_NOCTTY | libc::O_CLOEXEC,
+        );
         if slave_fd < 0 {
             libc::close(master_fd);
             return Err(format!("open slave: {}", std::io::Error::last_os_error()).into());
