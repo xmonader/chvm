@@ -25,8 +25,10 @@ pub fn execute(args: &SetupArgs) -> anyhow::Result<()> {
             if !default.exists() {
                 if let Ok(kernels) = kernel_mgr.list_kernels() {
                     if let Some(k) = kernels.first() {
-                        let _ = kernel_mgr.set_default(&k.name);
-                        println!("  Set default kernel: {}", k.name);
+                        match kernel_mgr.set_default(&k.name) {
+                            Ok(()) => println!("  Set default kernel: {}", k.name),
+                            Err(e) => eprintln!("  Warning: Failed to set default kernel: {e}"),
+                        }
                     }
                 }
             }

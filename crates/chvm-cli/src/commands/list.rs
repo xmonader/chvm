@@ -4,7 +4,9 @@ use chvm_lib::vm::state::VmState;
 use chvm_lib::vm::VmManager;
 
 pub fn execute(manager: &mut VmManager, args: &ListArgs) -> anyhow::Result<()> {
-    let _ = manager.refresh_status();
+    if let Err(e) = manager.refresh_status() {
+        eprintln!("Warning: Failed to refresh VM status: {e}");
+    }
     let vms = manager.list();
 
     // Print header

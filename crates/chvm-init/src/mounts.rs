@@ -17,7 +17,9 @@ pub fn mount_essential() -> Result<(), Box<dyn std::error::Error>> {
     ];
 
     for (source, target, fstype, flags, data) in mounts {
-        let _ = std::fs::create_dir_all(target);
+        if let Err(e) = std::fs::create_dir_all(target) {
+            eprintln!("[init] Warning: Failed to create mount target {target}: {e}");
+        }
 
         let data_opt: Option<&str> = if data.is_empty() { None } else { Some(data) };
         match mount(Some(source), target, Some(fstype), flags, data_opt) {
@@ -47,7 +49,9 @@ pub fn mount_volumes() -> Result<(), Box<dyn std::error::Error>> {
             for m in mounts_str.split(',') {
                 if let Some((tag, target)) = m.split_once('=') {
                     println!("[init] Mounting volume {tag} at {target}");
-                    let _ = std::fs::create_dir_all(target);
+                    if let Err(e) = std::fs::create_dir_all(target) {
+                        eprintln!("[init] Warning: Failed to create mount target {target}: {e}");
+                    }
                     match mount(
                         Some(tag),
                         target,

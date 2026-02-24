@@ -74,7 +74,9 @@ fn extract_layer(layer_path: &str, dest_dir: &Path) -> anyhow::Result<()> {
                     let full_parent = dest_dir.join(parent);
                     if full_parent.exists() {
                         for child in fs::read_dir(&full_parent)?.flatten() {
-                            let _ = fs::remove_dir_all(child.path());
+                            if let Err(e) = fs::remove_dir_all(child.path()) {
+                                warn!(path = %child.path().display(), error = %e, "Failed to remove entry during opaque whiteout");
+                            }
                         }
                     }
                 }
@@ -85,8 +87,12 @@ fn extract_layer(layer_path: &str, dest_dir: &Path) -> anyhow::Result<()> {
                 // Regular whiteout: delete the specific file
                 if let Some(parent) = path.parent() {
                     let target = dest_dir.join(parent).join(stripped);
-                    let _ = fs::remove_file(&target);
-                    let _ = fs::remove_dir_all(&target);
+                    // Target could be a file or directory; try both, warn if neither succeeds
+                    let file_result = fs::remove_file(&target);
+                    let dir_result = fs::remove_dir_all(&target);
+                    if file_result.is_err() && dir_result.is_err() && target.exists() {
+                        warn!(path = %target.display(), "Failed to apply whiteout: could not remove target");
+                    }
                 }
                 continue;
             }

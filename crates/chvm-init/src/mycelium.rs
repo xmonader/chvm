@@ -24,7 +24,7 @@ pub fn setup_mycelium() -> Result<(), Box<dyn std::error::Error>> {
     let mycelium_bin =
         crate::helpers::find_binary("mycelium", &[]).ok_or("mycelium binary not found")?;
 
-    let _ = std::fs::create_dir_all("/etc/mycelium");
+    std::fs::create_dir_all("/etc/mycelium")?;
     let key = key_path.unwrap_or_else(|| "/etc/mycelium/priv_key.bin".to_string());
 
     let mut args = vec![

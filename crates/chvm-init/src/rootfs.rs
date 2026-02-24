@@ -43,20 +43,27 @@ fn switch_root(new_root: &str) -> Result<(), Box<dyn std::error::Error>> {
     // Move essential mounts
     for m in ["/dev", "/proc", "/sys", "/run"] {
         let new_path = format!("{new_root}{m}");
-        let _ = std::fs::create_dir_all(&new_path);
-        let _ = mount(
+        if let Err(e) = std::fs::create_dir_all(&new_path) {
+            eprintln!("[init] Warning: Failed to create {new_path}: {e}");
+            continue;
+        }
+        if let Err(e) = mount(
             Some(m),
             new_path.as_str(),
             None::<&str>,
             MsFlags::MS_MOVE,
             None::<&str>,
-        );
+        ) {
+            eprintln!("[init] Warning: Failed to move mount {m} to {new_path}: {e}");
+        }
     }
 
     // Pivot root
     match nix::unistd::pivot_root(".", "mnt") {
         Ok(()) => {
-            let _ = nix::mount::umount2("/mnt", MntFlags::MNT_DETACH);
+            if let Err(e) = nix::mount::umount2("/mnt", MntFlags::MNT_DETACH) {
+                eprintln!("[init] Warning: Failed to unmount old root /mnt: {e}");
+            }
         }
         Err(_) => {
             // Fallback to chroot

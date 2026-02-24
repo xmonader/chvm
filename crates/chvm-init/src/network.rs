@@ -55,7 +55,18 @@ pub fn setup_network() -> Result<(), Box<dyn std::error::Error>> {
         let mut found = false;
         for d in &dhcp_clients {
             if std::path::Path::new(d).exists() {
-                let _ = Command::new(d).arg("eth0").output();
+                match Command::new(d).arg("eth0").output() {
+                    Ok(output) if !output.status.success() => {
+                        eprintln!(
+                            "[init] Warning: DHCP client {d} failed: {}",
+                            String::from_utf8_lossy(&output.stderr)
+                        );
+                    }
+                    Err(e) => {
+                        eprintln!("[init] Warning: Failed to run DHCP client {d}: {e}");
+                    }
+                    _ => {}
+                }
                 found = true;
                 break;
             }
@@ -76,7 +87,19 @@ pub fn setup_network() -> Result<(), Box<dyn std::error::Error>> {
 /// Run an `ip` command best-effort. No-op if ip binary was not found.
 fn run_ip(ip_cmd: &Option<String>, args: &[&str]) {
     if let Some(ref ip) = ip_cmd {
-        let _ = Command::new(ip).args(args).output();
+        match Command::new(ip).args(args).output() {
+            Ok(output) if !output.status.success() => {
+                eprintln!(
+                    "[init] Warning: ip {} failed: {}",
+                    args.join(" "),
+                    String::from_utf8_lossy(&output.stderr)
+                );
+            }
+            Err(e) => {
+                eprintln!("[init] Warning: Failed to run ip {}: {e}", args.join(" "));
+            }
+            _ => {}
+        }
     }
 }
 
