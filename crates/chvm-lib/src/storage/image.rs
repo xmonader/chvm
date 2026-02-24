@@ -212,7 +212,10 @@ fn inject_kernel_modules(mount_point: &Path) {
     let _ = std::fs::create_dir_all(&dest_dir);
 
     for module in KERNEL_MODULES {
-        let filename = Path::new(module).file_name().unwrap().to_string_lossy();
+        let Some(filename) = Path::new(module).file_name() else {
+            continue;
+        };
+        let filename = filename.to_string_lossy();
         let dest = dest_dir.join(filename.as_ref());
 
         // Try uncompressed first

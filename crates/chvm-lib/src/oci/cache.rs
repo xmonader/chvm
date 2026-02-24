@@ -52,8 +52,7 @@ impl ImageCache {
     pub fn add(&mut self, result: &PullResult) -> Result<CachedImage> {
         let digest = sanitize_digest(&result.digest);
 
-        if self.index.images.contains_key(&digest) {
-            let existing = self.index.images.get_mut(&digest).unwrap();
+        if let Some(existing) = self.index.images.get_mut(&digest) {
             existing.last_used_at = Utc::now();
             if !existing.refs.contains(&result.reference) {
                 existing.refs.push(result.reference.clone());
