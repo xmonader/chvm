@@ -86,18 +86,21 @@ pub fn handle_exec(fd: i32) {
             // Read stdout and stderr concurrently to avoid deadlock:
             // If child fills the stderr pipe buffer before stdout is drained, both block.
             let stderr = child.stderr.take();
-            let stderr_thread = stderr.map(|stderr| {
-                std::thread::spawn(move || {
-                    let mut lines = Vec::new();
+            let stderr_thread = stderr.and_then(|stderr| {
+                let stderr_writer = file.try_clone().ok()?;
+                Some(std::thread::spawn(move || {
+                    let mut w = stderr_writer;
                     let reader = BufReader::new(stderr);
                     for line in reader.lines() {
                         match line {
-                            Ok(l) => lines.push(l),
+                            Ok(l) => {
+                                let _ = writeln!(w, "OUTPUT:{}", l);
+                                let _ = w.flush();
+                            }
                             Err(_) => break,
                         }
                     }
-                    lines
-                })
+                }))
             });
 
             // Stream stdout directly to the client
@@ -117,18 +120,9 @@ pub fn handle_exec(fd: i32) {
                 }
             }
 
-            // Now collect stderr lines and send them
+            // Wait for stderr thread to finish before sending the response
             if let Some(handle) = stderr_thread {
-                if let Ok(lines) = handle.join() {
-                    for l in lines {
-                        if writeln!(writer, "OUTPUT:{}", l).is_err() || writer.flush().is_err() {
-                            eprintln!(
-                                "[exec] Warning: vsock write failed, client may have disconnected"
-                            );
-                            break;
-                        }
-                    }
-                }
+                let _ = handle.join();
             }
 
             let status = child.wait().ok();
