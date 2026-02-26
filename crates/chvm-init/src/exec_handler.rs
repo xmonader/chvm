@@ -1,6 +1,7 @@
 use std::io::{BufRead, BufReader, Write};
 use std::os::unix::io::FromRawFd;
 use std::process::Command;
+use std::sync::{Arc, Mutex};
 
 use serde::{Deserialize, Serialize};
 
@@ -81,26 +82,34 @@ pub fn handle_exec(fd: i32) {
     cmd.stdout(std::process::Stdio::piped());
     cmd.stderr(std::process::Stdio::piped());
 
+    let writer = Arc::new(Mutex::new(file));
+
     match cmd.spawn() {
         Ok(mut child) => {
             // Read stdout and stderr concurrently to avoid deadlock:
             // If child fills the stderr pipe buffer before stdout is drained, both block.
+            // Both threads share the same vsock fd via Arc<Mutex<>> to prevent interleaved writes.
             let stderr = child.stderr.take();
-            let stderr_thread = stderr.and_then(|stderr| {
-                let stderr_writer = file.try_clone().ok()?;
-                Some(std::thread::spawn(move || {
-                    let mut w = stderr_writer;
+            let stderr_thread = stderr.map(|stderr| {
+                let w = Arc::clone(&writer);
+                std::thread::spawn(move || {
                     let reader = BufReader::new(stderr);
                     for line in reader.lines() {
                         match line {
                             Ok(l) => {
-                                let _ = writeln!(w, "OUTPUT:{}", l);
-                                let _ = w.flush();
+                                let formatted = format!("OUTPUT:{}\n", l);
+                                let mut w = w.lock().unwrap_or_else(|e| e.into_inner());
+                                if w.write_all(formatted.as_bytes()).is_err()
+                                    || w.flush().is_err()
+                                {
+                                    eprintln!("[exec] Warning: Failed to write stderr output over vsock");
+                                    break;
+                                }
                             }
                             Err(_) => break,
                         }
                     }
-                }))
+                })
             });
 
             // Stream stdout directly to the client
@@ -109,9 +118,12 @@ pub fn handle_exec(fd: i32) {
                 for line in stdout_reader.lines() {
                     match line {
                         Ok(l) => {
-                            if writeln!(writer, "OUTPUT:{}", l).is_err() || writer.flush().is_err()
+                            let formatted = format!("OUTPUT:{}\n", l);
+                            let mut w = writer.lock().unwrap_or_else(|e| e.into_inner());
+                            if w.write_all(formatted.as_bytes()).is_err()
+                                || w.flush().is_err()
                             {
-                                eprintln!("[exec] Warning: vsock write failed, client may have disconnected");
+                                eprintln!("[exec] Warning: Failed to write stdout output over vsock");
                                 break;
                             }
                         }
@@ -122,7 +134,9 @@ pub fn handle_exec(fd: i32) {
 
             // Wait for stderr thread to finish before sending the response
             if let Some(handle) = stderr_thread {
-                let _ = handle.join();
+                if handle.join().is_err() {
+                    eprintln!("chvm-init: stderr relay thread panicked");
+                }
             }
 
             let status = child.wait().ok();
