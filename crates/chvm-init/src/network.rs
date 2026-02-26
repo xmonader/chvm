@@ -106,7 +106,7 @@ fn run_ip(ip_cmd: &Option<String>, args: &[&str]) {
 /// Bring up a network interface using ioctl, no external binaries needed.
 fn bring_up_interface(name: &str) {
     unsafe {
-        let sock = libc::socket(libc::AF_INET, libc::SOCK_DGRAM, 0);
+        let sock = libc::socket(libc::AF_INET, libc::SOCK_DGRAM | libc::SOCK_CLOEXEC, 0);
         if sock < 0 {
             return;
         }

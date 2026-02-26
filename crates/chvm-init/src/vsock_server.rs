@@ -17,7 +17,14 @@ fn run_server(port: u32, name: &str, handler: fn(i32)) {
     println!("[init] {name} server listening on vsock port {port}");
 
     loop {
-        let conn_fd = unsafe { libc::accept(fd, std::ptr::null_mut(), std::ptr::null_mut()) };
+        let conn_fd = unsafe {
+            libc::accept4(
+                fd,
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+                libc::SOCK_CLOEXEC,
+            )
+        };
         if conn_fd < 0 {
             continue;
         }
@@ -39,7 +46,7 @@ pub fn run_shell_server() {
 
 fn create_vsock_listener(port: u32) -> Result<i32, String> {
     unsafe {
-        let fd = libc::socket(libc::AF_VSOCK, libc::SOCK_STREAM, 0);
+        let fd = libc::socket(libc::AF_VSOCK, libc::SOCK_STREAM | libc::SOCK_CLOEXEC, 0);
         if fd < 0 {
             return Err(format!(
                 "socket() failed: {}",
