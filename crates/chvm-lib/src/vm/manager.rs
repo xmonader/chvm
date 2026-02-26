@@ -455,7 +455,9 @@ impl VmManager {
     pub fn refresh_status(&mut self) -> Result<()> {
         let ids: Vec<String> = self.state_store.states.keys().cloned().collect();
         for id in ids {
-            let state = self.state_store.states.get(&id).unwrap().clone();
+            let Some(state) = self.state_store.states.get(&id).cloned() else {
+                continue;
+            };
             if state.status == VmState::Running
                 && state.vmm_pid > 0
                 && !process_running(state.vmm_pid)
@@ -510,7 +512,9 @@ impl VmManager {
                 None,
             ))
         } else {
-            let ref_str = opts.image_ref.as_deref().unwrap();
+            let ref_str = opts.image_ref.as_deref().ok_or_else(|| {
+                ChvmError::Other("image_ref is required when rootfs_path is not set".into())
+            })?;
             let cached = match self.image_cache.get(ref_str) {
                 Ok(cached) => cached,
                 Err(_) => {
@@ -855,7 +859,9 @@ impl VmManager {
             }
             if let Some(ref overlay) = ss.overlay_dir {
                 let merged = Path::new(overlay).join("merged");
-                let _ = nix::mount::umount2(&merged, nix::mount::MntFlags::MNT_DETACH);
+                if let Err(e) = nix::mount::umount2(&merged, nix::mount::MntFlags::MNT_DETACH) {
+                    warn!(path = %merged.display(), error = %e, "Failed to unmount overlay during cleanup");
+                }
             }
         }
     }

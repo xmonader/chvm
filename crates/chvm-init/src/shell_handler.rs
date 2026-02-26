@@ -28,9 +28,18 @@ pub fn handle_shell(fd: i32) {
     cmd.env("PS1", "# ");
     cmd.current_dir("/root");
 
-    cmd.stdin(slave.try_clone().unwrap());
-    cmd.stdout(slave.try_clone().unwrap());
-    cmd.stderr(slave.try_clone().unwrap());
+    let (slave_in, slave_out, slave_err) =
+        match (slave.try_clone(), slave.try_clone(), slave.try_clone()) {
+            (Ok(a), Ok(b), Ok(c)) => (a, b, c),
+            _ => {
+                let mut w = &file;
+                let _ = writeln!(w, "Failed to clone PTY slave fd");
+                return;
+            }
+        };
+    cmd.stdin(slave_in);
+    cmd.stdout(slave_out);
+    cmd.stderr(slave_err);
 
     let _child = match cmd.spawn() {
         Ok(child) => child,
@@ -43,8 +52,14 @@ pub fn handle_shell(fd: i32) {
     drop(slave);
 
     // Bidirectional proxy: vsock <-> pty
-    let mut master_clone = master.try_clone().unwrap();
-    let file_clone = file.try_clone().unwrap();
+    let (mut master_clone, file_clone) = match (master.try_clone(), file.try_clone()) {
+        (Ok(m), Ok(f)) => (m, f),
+        _ => {
+            let mut w = &file;
+            let _ = writeln!(w, "Failed to clone fd for proxy");
+            return;
+        }
+    };
 
     // vsock -> pty
     let t1 = std::thread::spawn(move || {

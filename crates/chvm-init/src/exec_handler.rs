@@ -41,8 +41,7 @@ pub fn handle_exec(fd: i32) {
                 exit_code: -1,
                 error: Some(format!("invalid request: {e}")),
             };
-            let _ = serde_json::to_writer(&mut writer, &resp);
-            let _ = writer.write_all(b"\n");
+            send_response(&mut writer, &resp);
             return;
         }
     };
@@ -52,8 +51,7 @@ pub fn handle_exec(fd: i32) {
             exit_code: -1,
             error: Some("no command specified".into()),
         };
-        let _ = serde_json::to_writer(&mut writer, &resp);
-        let _ = writer.write_all(b"\n");
+        send_response(&mut writer, &resp);
         return;
     }
 
@@ -108,8 +106,11 @@ pub fn handle_exec(fd: i32) {
                 for line in stdout_reader.lines() {
                     match line {
                         Ok(l) => {
-                            let _ = writeln!(writer, "OUTPUT:{}", l);
-                            let _ = writer.flush();
+                            if writeln!(writer, "OUTPUT:{}", l).is_err() || writer.flush().is_err()
+                            {
+                                eprintln!("[exec] Warning: vsock write failed, client may have disconnected");
+                                break;
+                            }
                         }
                         Err(_) => break,
                     }
@@ -120,8 +121,12 @@ pub fn handle_exec(fd: i32) {
             if let Some(handle) = stderr_thread {
                 if let Ok(lines) = handle.join() {
                     for l in lines {
-                        let _ = writeln!(writer, "OUTPUT:{}", l);
-                        let _ = writer.flush();
+                        if writeln!(writer, "OUTPUT:{}", l).is_err() || writer.flush().is_err() {
+                            eprintln!(
+                                "[exec] Warning: vsock write failed, client may have disconnected"
+                            );
+                            break;
+                        }
                     }
                 }
             }
@@ -132,18 +137,23 @@ pub fn handle_exec(fd: i32) {
                 exit_code,
                 error: None,
             };
-            let _ = serde_json::to_writer(&mut writer, &resp);
-            let _ = writer.write_all(b"\n");
-            let _ = writer.flush();
+            send_response(&mut writer, &resp);
         }
         Err(e) => {
             let resp = ExecResponse {
                 exit_code: -1,
                 error: Some(format!("failed to start: {e}")),
             };
-            let _ = serde_json::to_writer(&mut writer, &resp);
-            let _ = writer.write_all(b"\n");
-            let _ = writer.flush();
+            send_response(&mut writer, &resp);
         }
+    }
+}
+
+fn send_response(writer: &mut &std::fs::File, resp: &ExecResponse) {
+    if serde_json::to_writer(&mut *writer, resp).is_err()
+        || writer.write_all(b"\n").is_err()
+        || writer.flush().is_err()
+    {
+        eprintln!("[exec] Warning: Failed to send response over vsock");
     }
 }

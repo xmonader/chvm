@@ -19,7 +19,9 @@ pub async fn execute(manager: &mut VmManager, args: &RunArgs) -> anyhow::Result<
         loop {
             tokio::time::sleep(std::time::Duration::from_secs(1)).await;
             // Re-check process liveness before reading status
-            let _ = manager.refresh_status();
+            if let Err(e) = manager.refresh_status() {
+                eprintln!("Warning: Failed to refresh VM status: {e}");
+            }
             match manager.get(&state.id) {
                 Ok(s) if s.status != chvm_lib::vm::state::VmState::Running => break,
                 Err(_) => break,
@@ -36,7 +38,9 @@ pub async fn execute(manager: &mut VmManager, args: &RunArgs) -> anyhow::Result<
 
         // Remove if --rm
         if args.rm {
-            let _ = manager.remove(&state.id, true).await;
+            if let Err(e) = manager.remove(&state.id, true).await {
+                eprintln!("Warning: Failed to remove VM after exit: {e}");
+            }
         }
     }
 

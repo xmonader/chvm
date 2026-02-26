@@ -166,11 +166,18 @@ pub(crate) fn inject_binary(
         if src.exists() {
             let dest = mount_point.join(dest_rel);
             if let Some(parent) = dest.parent() {
-                let _ = std::fs::create_dir_all(parent);
+                if let Err(e) = std::fs::create_dir_all(parent) {
+                    warn!(path = %parent.display(), error = %e, "Failed to create parent dir for {name}");
+                    continue;
+                }
             }
             match std::fs::copy(src, &dest) {
                 Ok(_) => {
-                    let _ = std::fs::set_permissions(&dest, std::fs::Permissions::from_mode(0o755));
+                    if let Err(e) =
+                        std::fs::set_permissions(&dest, std::fs::Permissions::from_mode(0o755))
+                    {
+                        warn!(path = %dest.display(), error = %e, "Failed to set executable permissions on {name}");
+                    }
                     info!(path = %src.display(), "Injected {name}");
                     return;
                 }
@@ -209,10 +216,16 @@ fn inject_kernel_modules(mount_point: &Path) {
     }
 
     let dest_dir = mount_point.join("lib/modules");
-    let _ = std::fs::create_dir_all(&dest_dir);
+    if let Err(e) = std::fs::create_dir_all(&dest_dir) {
+        warn!(error = %e, "Failed to create kernel modules directory, skipping module injection");
+        return;
+    }
 
     for module in KERNEL_MODULES {
-        let filename = Path::new(module).file_name().unwrap().to_string_lossy();
+        let Some(filename) = Path::new(module).file_name() else {
+            continue;
+        };
+        let filename = filename.to_string_lossy();
         let dest = dest_dir.join(filename.as_ref());
 
         // Try uncompressed first
@@ -231,7 +244,10 @@ fn inject_kernel_modules(mount_point: &Path) {
             let src = mod_base.join(format!("{module}{suffix}"));
             if src.exists() {
                 let tmp_compressed = dest.with_extension(format!("ko{suffix}"));
-                let _ = std::fs::copy(&src, &tmp_compressed);
+                if let Err(e) = std::fs::copy(&src, &tmp_compressed) {
+                    warn!(module = %module, error = %e, "Failed to copy compressed kernel module");
+                    break;
+                }
 
                 let mut cmd = Command::new(tool);
                 cmd.args(base_args);
@@ -241,8 +257,17 @@ fn inject_kernel_modules(mount_point: &Path) {
                 } else {
                     cmd.arg(&tmp_compressed);
                 }
-                let _ = cmd.output();
+                match cmd.output() {
+                    Ok(output) if !output.status.success() => {
+                        warn!(module = %module, tool = %tool, "Decompressor failed: {}", String::from_utf8_lossy(&output.stderr));
+                    }
+                    Err(e) => {
+                        warn!(module = %module, tool = %tool, error = %e, "Failed to run decompressor");
+                    }
+                    _ => {}
+                }
 
+                // Clean up temp file (best-effort, non-critical)
                 let _ = std::fs::remove_file(&tmp_compressed);
 
                 if dest.exists() {

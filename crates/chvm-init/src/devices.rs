@@ -15,7 +15,7 @@ pub fn create_devices() -> Result<(), Box<dyn std::error::Error>> {
         let _ = std::fs::remove_file(path);
         let dev = nix::sys::stat::makedev(major, minor);
         unsafe {
-            let c_path = std::ffi::CString::new(path).unwrap();
+            let c_path = std::ffi::CString::new(path)?;
             let ret = libc::mknod(c_path.as_ptr(), mode, dev as libc::dev_t);
             if ret < 0 {
                 let err = std::io::Error::last_os_error();
