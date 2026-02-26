@@ -99,10 +99,11 @@ pub fn handle_exec(fd: i32) {
                             Ok(l) => {
                                 let formatted = format!("OUTPUT:{}\n", l);
                                 let mut w = w.lock().unwrap_or_else(|e| e.into_inner());
-                                if w.write_all(formatted.as_bytes()).is_err()
-                                    || w.flush().is_err()
+                                if w.write_all(formatted.as_bytes()).is_err() || w.flush().is_err()
                                 {
-                                    eprintln!("[exec] Warning: Failed to write stderr output over vsock");
+                                    eprintln!(
+                                        "[exec] Warning: Failed to write stderr output over vsock"
+                                    );
                                     break;
                                 }
                             }
@@ -120,10 +121,10 @@ pub fn handle_exec(fd: i32) {
                         Ok(l) => {
                             let formatted = format!("OUTPUT:{}\n", l);
                             let mut w = writer.lock().unwrap_or_else(|e| e.into_inner());
-                            if w.write_all(formatted.as_bytes()).is_err()
-                                || w.flush().is_err()
-                            {
-                                eprintln!("[exec] Warning: Failed to write stdout output over vsock");
+                            if w.write_all(formatted.as_bytes()).is_err() || w.flush().is_err() {
+                                eprintln!(
+                                    "[exec] Warning: Failed to write stdout output over vsock"
+                                );
                                 break;
                             }
                         }
@@ -145,19 +146,21 @@ pub fn handle_exec(fd: i32) {
                 exit_code,
                 error: None,
             };
-            send_response(&mut writer, &resp);
+            let mut w = writer.lock().unwrap_or_else(|e| e.into_inner());
+            send_response(&mut *w, &resp);
         }
         Err(e) => {
             let resp = ExecResponse {
                 exit_code: -1,
                 error: Some(format!("failed to start: {e}")),
             };
-            send_response(&mut writer, &resp);
+            let mut w = writer.lock().unwrap_or_else(|e| e.into_inner());
+            send_response(&mut *w, &resp);
         }
     }
 }
 
-fn send_response(writer: &mut &std::fs::File, resp: &ExecResponse) {
+fn send_response(writer: &mut impl Write, resp: &ExecResponse) {
     if serde_json::to_writer(&mut *writer, resp).is_err()
         || writer.write_all(b"\n").is_err()
         || writer.flush().is_err()
