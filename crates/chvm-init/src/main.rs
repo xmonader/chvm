@@ -52,10 +52,20 @@ fn main() {
         eprintln!("[init] Warning: Failed to mount volumes: {e}");
     }
 
-    // Setup mycelium if configured
-    if let Err(e) = mycelium::setup_mycelium() {
-        eprintln!("[init] Warning: Failed to setup mycelium: {e}");
-    }
+    // Setup and spawn mycelium if configured
+    let mycelium_state = match mycelium::setup_mycelium() {
+        Ok(Some(config)) => {
+            let pid = mycelium::spawn_mycelium(&config);
+            // Wait for interface to come up before host-side probing
+            std::thread::sleep(std::time::Duration::from_secs(3));
+            pid.map(|p| (p, config))
+        }
+        Ok(None) => None,
+        Err(e) => {
+            eprintln!("[init] Warning: Failed to setup mycelium: {e}");
+            None
+        }
+    };
 
     // Load configuration from kernel cmdline
     let config = cmdline_parser::load_config();
@@ -107,8 +117,8 @@ fn main() {
 
     match child {
         Ok(mut child) => {
-            // Setup zombie reaping in background
-            std::thread::spawn(signal::reap_zombies);
+            // Setup zombie reaping (and mycelium supervision) in background
+            std::thread::spawn(move || signal::reap_zombies(mycelium_state));
 
             let status = child.wait().unwrap_or_else(|e| {
                 eprintln!("[init] Failed to wait for process: {e}");

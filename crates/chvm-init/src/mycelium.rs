@@ -1,6 +1,14 @@
 use std::process::Command;
 
-pub fn setup_mycelium() -> Result<(), Box<dyn std::error::Error>> {
+/// Configuration needed to spawn and supervise the mycelium daemon.
+pub struct MyceliumConfig {
+    pub binary: String,
+    pub args: Vec<String>,
+}
+
+/// Parse kernel cmdline for mycelium configuration and return a `MyceliumConfig`
+/// if mycelium peers are configured. Does not spawn the process.
+pub fn setup_mycelium() -> Result<Option<MyceliumConfig>, Box<dyn std::error::Error>> {
     let cmdline = std::fs::read_to_string("/proc/cmdline").unwrap_or_default();
     let mut peers = None;
     let mut key_path = None;
@@ -16,10 +24,8 @@ pub fn setup_mycelium() -> Result<(), Box<dyn std::error::Error>> {
 
     let peers = match peers {
         Some(p) => p,
-        None => return Ok(()),
+        None => return Ok(None),
     };
-
-    println!("[init] Starting mycelium with peers: {peers}");
 
     let mycelium_bin =
         crate::helpers::find_binary("mycelium", &[]).ok_or("mycelium binary not found")?;
@@ -43,16 +49,32 @@ pub fn setup_mycelium() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
 
-    let child = Command::new(&mycelium_bin)
-        .args(&args)
+    println!("[init] Mycelium configured with peers: {peers}");
+
+    Ok(Some(MyceliumConfig {
+        binary: mycelium_bin,
+        args,
+    }))
+}
+
+/// Spawn the mycelium daemon, returning its PID on success.
+pub fn spawn_mycelium(config: &MyceliumConfig) -> Option<u32> {
+    println!("[init] Starting mycelium...");
+
+    match Command::new(&config.binary)
+        .args(&config.args)
         .stdout(std::process::Stdio::inherit())
         .stderr(std::process::Stdio::inherit())
-        .spawn()?;
-
-    println!("[init] Mycelium started (PID {})", child.id());
-
-    // Wait for interface
-    std::thread::sleep(std::time::Duration::from_secs(3));
-
-    Ok(())
+        .spawn()
+    {
+        Ok(child) => {
+            let pid = child.id();
+            println!("[init] Mycelium started (PID {pid})");
+            Some(pid)
+        }
+        Err(e) => {
+            eprintln!("[init] Failed to start mycelium: {e}");
+            None
+        }
+    }
 }

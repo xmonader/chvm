@@ -369,9 +369,9 @@ impl VmManager {
         self.state_store.save(&state)?;
         info!(vm_id = %state.id, pid = pid, "VM started");
 
-        // Probe mycelium IP in the background after boot
+        // Probe mycelium IP after boot with retries
         if state.vm_config.network.mode == NetworkMode::Mycelium {
-            if let Some(ip) = self.probe_mycelium_ip(&state).await {
+            if let Some(ip) = self.probe_mycelium_ip_with_retries(&state).await {
                 if let Some(ref mut ns) = state.network_state {
                     ns.mycelium_ip = Some(ip.clone());
                 }
@@ -528,6 +528,73 @@ impl VmManager {
             }
         }
         Ok(())
+    }
+
+    /// Check mycelium health for a running VM by probing the guest.
+    /// Uses a single-attempt probe (no retry loop) for fast results.
+    /// Returns the health status and updates persisted state.
+    pub async fn check_mycelium_health(
+        &mut self,
+        id_or_name: &str,
+    ) -> Result<MyceliumHealth> {
+        let state = self.state_store.resolve_clone(id_or_name)?;
+
+        if state.status != VmState::Running {
+            return Ok(MyceliumHealth::Unknown);
+        }
+
+        match state.network_state.as_ref() {
+            Some(ns) if ns.mycelium_enabled => ns,
+            _ => return Ok(MyceliumHealth::Unknown),
+        };
+
+        let vsock_path = match state.vm_config.vsock_socket_path() {
+            Some(p) => p,
+            None => return Ok(MyceliumHealth::Unknown),
+        };
+
+        // Single-attempt probe — no retry loop, suitable for on-demand health checks
+        let probed_ip = self.probe_mycelium_ip(&vsock_path).await;
+
+        let health = match &probed_ip {
+            Some(_) => MyceliumHealth::Healthy,
+            None => {
+                let pgrep_opts = ExecOptions {
+                    cmd: vec!["pgrep".into(), "-x".into(), "mycelium".into()],
+                    env: vec![],
+                    working_dir: None,
+                };
+
+                let process_alive = matches!(
+                    crate::vsock::proxy::exec_capture(&vsock_path, &pgrep_opts).await,
+                    Ok((0, _))
+                );
+
+                if process_alive {
+                    // Process is alive but has no IP — may still be converging.
+                    // Callers should track how long this persists.
+                    MyceliumHealth::Unknown
+                } else {
+                    warn!(vm_id = %state.id, "Mycelium process not running in guest");
+                    MyceliumHealth::Unhealthy
+                }
+            }
+        };
+
+        // Update persisted state
+        let mut updated = state.clone();
+        if let Some(ref mut ns) = updated.network_state {
+            if let Some(ref ip) = probed_ip {
+                if ns.mycelium_ip.as_deref() != Some(ip) {
+                    info!(vm_id = %updated.id, mycelium_ip = %ip, "Mycelium IP updated");
+                    ns.mycelium_ip = Some(ip.clone());
+                }
+            }
+            ns.mycelium_health = Some(health);
+        }
+        let _ = self.state_store.save(&updated);
+
+        Ok(health)
     }
 
     /// Prune stopped VMs.
@@ -710,6 +777,7 @@ impl VmManager {
             mycelium_enabled: result.mycelium_enabled,
             mycelium_peers: result.mycelium_peers.clone(),
             mycelium_ip: None,
+            mycelium_health: None,
         });
 
         state.vm_config.network.tap_device = result.tap_device;
@@ -743,11 +811,74 @@ impl VmManager {
         Ok(())
     }
 
-    /// Probe the guest for its mycelium IPv6 address.
-    /// Tries `ip` first, falls back to reading /proc/net/if_inet6 for images
-    /// that don't have iproute2 installed (e.g. nginx, redis).
-    /// Retries a few times to allow mycelium to start after boot.
-    async fn probe_mycelium_ip(&self, state: &RuntimeState) -> Option<String> {
+    /// Probe the guest for its mycelium IPv6 address via vsock.
+    /// Tries `ip` command first, falls back to reading /proc/net/if_inet6
+    /// for images that don't have iproute2 installed (e.g. nginx, redis).
+    async fn probe_mycelium_ip(&self, vsock_path: &str) -> Option<String> {
+        // Method 1: try `ip` command
+        let ip_opts = ExecOptions {
+            cmd: vec![
+                "ip".into(),
+                "-6".into(),
+                "-o".into(),
+                "addr".into(),
+                "show".into(),
+                "dev".into(),
+                "mycelium".into(),
+                "scope".into(),
+                "global".into(),
+            ],
+            env: vec![],
+            working_dir: None,
+        };
+
+        if let Ok((0, output)) = crate::vsock::proxy::exec_capture(vsock_path, &ip_opts).await {
+            for line in output.lines() {
+                if let Some(inet6_pos) = line.find("inet6 ") {
+                    let addr_part = &line[inet6_pos + 6..];
+                    if let Some(slash) = addr_part.find('/') {
+                        let ip = addr_part[..slash].trim();
+                        if !ip.starts_with("fe80") {
+                            return Some(ip.to_string());
+                        }
+                    }
+                }
+            }
+        }
+
+        // Method 2: fall back to /proc/net/if_inet6 (works without iproute2)
+        let proc_opts = ExecOptions {
+            cmd: vec!["cat".into(), "/proc/net/if_inet6".into()],
+            env: vec![],
+            working_dir: None,
+        };
+
+        if let Ok((0, output)) = crate::vsock::proxy::exec_capture(vsock_path, &proc_opts).await {
+            for line in output.lines() {
+                let parts: Vec<&str> = line.split_whitespace().collect();
+                if parts.len() >= 6 && parts[5] == "mycelium" {
+                    let hex_addr = parts[0];
+                    if hex_addr.len() == 32 {
+                        // Parse into Ipv6Addr for canonical formatting
+                        let groups: [u16; 8] = std::array::from_fn(|i| {
+                            u16::from_str_radix(&hex_addr[i * 4..i * 4 + 4], 16).unwrap_or(0)
+                        });
+                        let addr = std::net::Ipv6Addr::from(groups);
+                        let ip = addr.to_string();
+                        if !ip.starts_with("fe80") {
+                            return Some(ip);
+                        }
+                    }
+                }
+            }
+        }
+
+        None
+    }
+
+    /// Probe mycelium IP with retries. Used at boot time to wait for
+    /// the mycelium daemon to start and acquire an address.
+    async fn probe_mycelium_ip_with_retries(&self, state: &RuntimeState) -> Option<String> {
         let vsock_path = state.vm_config.vsock_socket_path()?;
 
         for attempt in 0..MYCELIUM_PROBE_MAX_RETRIES {
@@ -758,80 +889,11 @@ impl VmManager {
             };
             tokio::time::sleep(std::time::Duration::from_secs(delay)).await;
 
-            // Method 1: try `ip` command
-            let ip_opts = ExecOptions {
-                cmd: vec![
-                    "ip".into(),
-                    "-6".into(),
-                    "-o".into(),
-                    "addr".into(),
-                    "show".into(),
-                    "dev".into(),
-                    "mycelium".into(),
-                    "scope".into(),
-                    "global".into(),
-                ],
-                env: vec![],
-                working_dir: None,
-            };
-
-            if let Ok((0, output)) = crate::vsock::proxy::exec_capture(&vsock_path, &ip_opts).await
-            {
-                // Parse: "3: mycelium    inet6 4xx:...:xxxx/7 scope global ..."
-                for line in output.lines() {
-                    if let Some(inet6_pos) = line.find("inet6 ") {
-                        let addr_part = &line[inet6_pos + 6..];
-                        if let Some(slash) = addr_part.find('/') {
-                            let ip = addr_part[..slash].trim();
-                            if !ip.starts_with("fe80") {
-                                return Some(ip.to_string());
-                            }
-                        }
-                    }
-                }
+            if let Some(ip) = self.probe_mycelium_ip(&vsock_path).await {
+                return Some(ip);
             }
 
-            // Method 2: fall back to /proc/net/if_inet6 (works without iproute2)
-            let proc_opts = ExecOptions {
-                cmd: vec!["cat".into(), "/proc/net/if_inet6".into()],
-                env: vec![],
-                working_dir: None,
-            };
-
-            if let Ok((0, output)) =
-                crate::vsock::proxy::exec_capture(&vsock_path, &proc_opts).await
-            {
-                // Format: "hex_addr idx prefix_len scope flags iface"
-                // e.g. "4001028500000000000000000000abcd 03 07 00 80 mycelium"
-                for line in output.lines() {
-                    let parts: Vec<&str> = line.split_whitespace().collect();
-                    if parts.len() >= 6 && parts[5] == "mycelium" {
-                        let hex_addr = parts[0];
-                        if hex_addr.len() == 32 {
-                            // Convert hex to IPv6 notation
-                            let ip = format!(
-                                "{:x}:{:x}:{:x}:{:x}:{:x}:{:x}:{:x}:{:x}",
-                                u16::from_str_radix(&hex_addr[0..4], 16).unwrap_or(0),
-                                u16::from_str_radix(&hex_addr[4..8], 16).unwrap_or(0),
-                                u16::from_str_radix(&hex_addr[8..12], 16).unwrap_or(0),
-                                u16::from_str_radix(&hex_addr[12..16], 16).unwrap_or(0),
-                                u16::from_str_radix(&hex_addr[16..20], 16).unwrap_or(0),
-                                u16::from_str_radix(&hex_addr[20..24], 16).unwrap_or(0),
-                                u16::from_str_radix(&hex_addr[24..28], 16).unwrap_or(0),
-                                u16::from_str_radix(&hex_addr[28..32], 16).unwrap_or(0),
-                            );
-                            if !ip.starts_with("fe80") {
-                                return Some(ip);
-                            }
-                        }
-                    }
-                }
-            }
-
-            debug!(
-                attempt = attempt,
-                "Mycelium IP probe attempt failed, retrying"
-            );
+            debug!(attempt = attempt, "Mycelium IP probe attempt failed, retrying");
         }
 
         warn!("Could not detect mycelium IP after retries");
