@@ -1,6 +1,7 @@
 use std::io::{BufRead, BufReader, Write};
 use std::os::unix::io::FromRawFd;
 use std::process::Command;
+use std::sync::{Arc, Mutex};
 
 use serde::{Deserialize, Serialize};
 
@@ -81,22 +82,34 @@ pub fn handle_exec(fd: i32) {
     cmd.stdout(std::process::Stdio::piped());
     cmd.stderr(std::process::Stdio::piped());
 
+    let writer = Arc::new(Mutex::new(file));
+
     match cmd.spawn() {
         Ok(mut child) => {
             // Read stdout and stderr concurrently to avoid deadlock:
             // If child fills the stderr pipe buffer before stdout is drained, both block.
+            // Both threads share the same vsock fd via Arc<Mutex<>> to prevent interleaved writes.
             let stderr = child.stderr.take();
             let stderr_thread = stderr.map(|stderr| {
+                let w = Arc::clone(&writer);
                 std::thread::spawn(move || {
-                    let mut lines = Vec::new();
                     let reader = BufReader::new(stderr);
                     for line in reader.lines() {
                         match line {
-                            Ok(l) => lines.push(l),
+                            Ok(l) => {
+                                let formatted = format!("OUTPUT:{}\n", l);
+                                let mut w = w.lock().unwrap_or_else(|e| e.into_inner());
+                                if w.write_all(formatted.as_bytes()).is_err() || w.flush().is_err()
+                                {
+                                    eprintln!(
+                                        "[exec] Warning: Failed to write stderr output over vsock"
+                                    );
+                                    break;
+                                }
+                            }
                             Err(_) => break,
                         }
                     }
-                    lines
                 })
             });
 
@@ -106,9 +119,12 @@ pub fn handle_exec(fd: i32) {
                 for line in stdout_reader.lines() {
                     match line {
                         Ok(l) => {
-                            if writeln!(writer, "OUTPUT:{}", l).is_err() || writer.flush().is_err()
-                            {
-                                eprintln!("[exec] Warning: vsock write failed, client may have disconnected");
+                            let formatted = format!("OUTPUT:{}\n", l);
+                            let mut w = writer.lock().unwrap_or_else(|e| e.into_inner());
+                            if w.write_all(formatted.as_bytes()).is_err() || w.flush().is_err() {
+                                eprintln!(
+                                    "[exec] Warning: Failed to write stdout output over vsock"
+                                );
                                 break;
                             }
                         }
@@ -117,17 +133,10 @@ pub fn handle_exec(fd: i32) {
                 }
             }
 
-            // Now collect stderr lines and send them
+            // Wait for stderr thread to finish before sending the response
             if let Some(handle) = stderr_thread {
-                if let Ok(lines) = handle.join() {
-                    for l in lines {
-                        if writeln!(writer, "OUTPUT:{}", l).is_err() || writer.flush().is_err() {
-                            eprintln!(
-                                "[exec] Warning: vsock write failed, client may have disconnected"
-                            );
-                            break;
-                        }
-                    }
+                if handle.join().is_err() {
+                    eprintln!("chvm-init: stderr relay thread panicked");
                 }
             }
 
@@ -137,19 +146,21 @@ pub fn handle_exec(fd: i32) {
                 exit_code,
                 error: None,
             };
-            send_response(&mut writer, &resp);
+            let mut w = writer.lock().unwrap_or_else(|e| e.into_inner());
+            send_response(&mut *w, &resp);
         }
         Err(e) => {
             let resp = ExecResponse {
                 exit_code: -1,
                 error: Some(format!("failed to start: {e}")),
             };
-            send_response(&mut writer, &resp);
+            let mut w = writer.lock().unwrap_or_else(|e| e.into_inner());
+            send_response(&mut *w, &resp);
         }
     }
 }
 
-fn send_response(writer: &mut &std::fs::File, resp: &ExecResponse) {
+fn send_response(writer: &mut impl Write, resp: &ExecResponse) {
     if serde_json::to_writer(&mut *writer, resp).is_err()
         || writer.write_all(b"\n").is_err()
         || writer.flush().is_err()
