@@ -1,7 +1,8 @@
 mod cli;
 mod commands;
 
-use clap::Parser;
+use clap::{CommandFactory, Parser};
+use clap_complete::CompleteEnv;
 use tracing_subscriber::EnvFilter;
 
 use chvm_lib::config::Config;
@@ -12,6 +13,8 @@ use cli::{Cli, Commands};
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    CompleteEnv::with_factory(Cli::command).complete();
+
     let cli = Cli::parse();
 
     // Setup logging

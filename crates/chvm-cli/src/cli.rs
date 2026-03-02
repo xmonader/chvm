@@ -1,4 +1,47 @@
 use clap::{Parser, Subcommand};
+use clap_complete::engine::{ArgValueCompleter, CompletionCandidate};
+
+fn complete_vm(current: &std::ffi::OsStr) -> Vec<CompletionCandidate> {
+    let Some(current) = current.to_str() else {
+        return vec![];
+    };
+
+    let paths = chvm_lib::paths::Paths::resolve();
+    let entries = match std::fs::read_dir(&paths.vms) {
+        Ok(e) => e,
+        Err(_) => return vec![],
+    };
+
+    let mut candidates = vec![];
+    for entry in entries.flatten() {
+        if !entry.file_type().map(|ft| ft.is_dir()).unwrap_or(false) {
+            continue;
+        }
+        let vm_id = entry.file_name().to_string_lossy().to_string();
+        let state_file = entry.path().join("state.json");
+        let name = std::fs::read_to_string(&state_file)
+            .ok()
+            .and_then(|data| serde_json::from_str::<serde_json::Value>(&data).ok())
+            .and_then(|v| v.get("name").and_then(|n| n.as_str()).map(String::from));
+
+        // Offer the VM ID if it prefix-matches
+        if vm_id.starts_with(current) {
+            let mut c = CompletionCandidate::new(vm_id.clone());
+            if let Some(ref n) = name {
+                c = c.help(Some(n.clone().into()));
+            }
+            candidates.push(c);
+        }
+
+        // Offer the VM name if it prefix-matches
+        if let Some(ref n) = name {
+            if n.starts_with(current) && n != &vm_id {
+                candidates.push(CompletionCandidate::new(n.as_str()).help(Some(vm_id.into())));
+            }
+        }
+    }
+    candidates
+}
 
 #[derive(Parser)]
 #[command(name = "chvm", about = "Cloud Hypervisor MicroVM Manager", version)]
@@ -183,18 +226,21 @@ pub struct CreateArgs {
 #[derive(clap::Args)]
 pub struct StartArgs {
     /// Container ID or name
+    #[arg(add = ArgValueCompleter::new(complete_vm))]
     pub container: String,
 }
 
 #[derive(clap::Args)]
 pub struct StopArgs {
     /// Container ID or name
+    #[arg(add = ArgValueCompleter::new(complete_vm))]
     pub container: String,
 }
 
 #[derive(clap::Args)]
 pub struct RmArgs {
     /// Container ID or name
+    #[arg(add = ArgValueCompleter::new(complete_vm))]
     pub container: String,
 
     /// Force removal of running container
@@ -206,6 +252,7 @@ pub struct RmArgs {
 #[command(trailing_var_arg = true)]
 pub struct ExecArgs {
     /// Container ID or name
+    #[arg(add = ArgValueCompleter::new(complete_vm))]
     pub container: String,
 
     /// Command to execute
@@ -224,6 +271,7 @@ pub struct ExecArgs {
 #[derive(clap::Args)]
 pub struct AttachArgs {
     /// Container ID or name
+    #[arg(add = ArgValueCompleter::new(complete_vm))]
     pub container: String,
 }
 
@@ -237,6 +285,7 @@ pub struct ListArgs {
 #[derive(clap::Args)]
 pub struct LogsArgs {
     /// Container ID or name
+    #[arg(add = ArgValueCompleter::new(complete_vm))]
     pub container: String,
 
     /// Follow log output
@@ -247,6 +296,7 @@ pub struct LogsArgs {
 #[derive(clap::Args)]
 pub struct InspectArgs {
     /// Container ID or name
+    #[arg(add = ArgValueCompleter::new(complete_vm))]
     pub container: String,
 }
 

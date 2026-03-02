@@ -92,10 +92,39 @@ impl StateStore {
             .ok_or_else(|| ChvmError::VmNotFound(name.to_string()))
     }
 
+    /// Match a VM by unique ID prefix.
+    fn get_by_id_prefix(&self, prefix: &str) -> Result<&RuntimeState> {
+        let matches: Vec<&RuntimeState> = self
+            .states
+            .iter()
+            .filter(|(id, _)| id.starts_with(prefix))
+            .map(|(_, state)| state)
+            .collect();
+
+        match matches.len() {
+            0 => Err(ChvmError::VmNotFound(prefix.to_string())),
+            1 => Ok(matches[0]),
+            _ => {
+                let ids: Vec<&str> = matches.iter().map(|s| s.id.as_str()).collect();
+                Err(ChvmError::VmAmbiguous(prefix.to_string(), ids.join(", ")))
+            }
+        }
+    }
+
     /// Resolve a VM by ID or name, returning the state.
+    ///
+    /// Resolution order: exact ID → exact name → unique ID prefix.
     pub fn resolve(&self, id_or_name: &str) -> Result<&RuntimeState> {
-        self.get(id_or_name)
-            .or_else(|_| self.get_by_name(id_or_name))
+        // 1. Exact ID match
+        if let Ok(state) = self.get(id_or_name) {
+            return Ok(state);
+        }
+        // 2. Exact name match
+        if let Ok(state) = self.get_by_name(id_or_name) {
+            return Ok(state);
+        }
+        // 3. ID prefix match
+        self.get_by_id_prefix(id_or_name)
     }
 
     /// Resolve a VM by ID or name, returning a mutable clone.
@@ -926,5 +955,119 @@ async fn wait_for_exit(pid: i32, timeout: std::time::Duration) {
             return;
         }
         tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn make_state(id: &str, name: &str) -> RuntimeState {
+        RuntimeState {
+            id: id.to_string(),
+            name: name.to_string(),
+            image_ref: "test:latest".to_string(),
+            image_digest: None,
+            vm_config: VmConfig {
+                id: id.to_string(),
+                name: name.to_string(),
+                vcpu: 1,
+                memory_mb: 512,
+                kernel: KernelConfig {
+                    path: "/kernel".to_string(),
+                    cmdline: "console=ttyS0".to_string(),
+                    initrd_path: None,
+                },
+                rootfs: RootfsConfig {
+                    source: "/rootfs".to_string(),
+                    rootfs_type: RootfsType::VirtioBlock,
+                    read_only: false,
+                },
+                network: NetworkConfig {
+                    mode: NetworkMode::None,
+                    tap_device: None,
+                    mac_address: None,
+                    ip_address: None,
+                    gateway: None,
+                    port_forwards: vec![],
+                    mycelium_peers: vec![],
+                    mycelium_key: None,
+                },
+                init: InitConfig {
+                    cmd: vec!["/bin/sh".to_string()],
+                    env: vec![],
+                    working_dir: None,
+                },
+                mounts: vec![],
+                log_path: None,
+                vsock_cid: 3,
+                state_dir: None,
+            },
+            status: VmState::Created,
+            vmm_pid: 0,
+            exit_code: None,
+            network_state: None,
+            storage_state: None,
+            created_at: Utc::now(),
+            started_at: None,
+            stopped_at: None,
+        }
+    }
+
+    fn setup_store_with_states(states: &[(&str, &str)]) -> (tempfile::TempDir, StateStore) {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut store = StateStore::new(tmp.path()).unwrap();
+        for (id, name) in states {
+            let state = make_state(id, name);
+            store.save(&state).unwrap();
+        }
+        (tmp, store)
+    }
+
+    #[test]
+    fn resolve_exact_id() {
+        let (_tmp, store) = setup_store_with_states(&[("a1b2c3d4e5f6", "myvm")]);
+        let state = store.resolve("a1b2c3d4e5f6").unwrap();
+        assert_eq!(state.id, "a1b2c3d4e5f6");
+    }
+
+    #[test]
+    fn resolve_exact_name() {
+        let (_tmp, store) = setup_store_with_states(&[("a1b2c3d4e5f6", "myvm")]);
+        let state = store.resolve("myvm").unwrap();
+        assert_eq!(state.id, "a1b2c3d4e5f6");
+    }
+
+    #[test]
+    fn resolve_id_prefix_unique() {
+        let (_tmp, store) =
+            setup_store_with_states(&[("a1b2c3d4e5f6", "vm1"), ("ffffff000000", "vm2")]);
+        let state = store.resolve("a1b").unwrap();
+        assert_eq!(state.id, "a1b2c3d4e5f6");
+    }
+
+    #[test]
+    fn resolve_id_prefix_ambiguous() {
+        let (_tmp, store) =
+            setup_store_with_states(&[("a1b2c3d4e5f6", "vm1"), ("a1b2ffffff00", "vm2")]);
+        let result = store.resolve("a1b2");
+        assert!(matches!(result, Err(ChvmError::VmAmbiguous(_, _))));
+    }
+
+    #[test]
+    fn resolve_not_found() {
+        let (_tmp, store) = setup_store_with_states(&[("a1b2c3d4e5f6", "myvm")]);
+        let result = store.resolve("zzz");
+        assert!(matches!(result, Err(ChvmError::VmNotFound(_))));
+    }
+
+    #[test]
+    fn resolve_name_takes_priority_over_prefix() {
+        // VM1 has ID starting with "a1b", VM2 is named "a1b"
+        let (_tmp, store) =
+            setup_store_with_states(&[("a1b2c3d4e5f6", "vm1"), ("ffffff000000", "a1b")]);
+        // "a1b" should resolve to VM2 (exact name match) not VM1 (prefix match)
+        let state = store.resolve("a1b").unwrap();
+        assert_eq!(state.id, "ffffff000000");
     }
 }

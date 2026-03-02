@@ -5,6 +5,9 @@ pub enum ChvmError {
     #[error("VM not found: {0}")]
     VmNotFound(String),
 
+    #[error("Ambiguous VM identifier '{0}', matches: {1}")]
+    VmAmbiguous(String, String),
+
     #[error("VM already exists: {0}")]
     VmAlreadyExists(String),
 
@@ -70,6 +73,15 @@ mod tests {
     fn test_vm_not_found_error() {
         let err = ChvmError::VmNotFound("test-vm".to_string());
         assert_eq!(err.to_string(), "VM not found: test-vm");
+    }
+
+    #[test]
+    fn test_vm_ambiguous_error() {
+        let err = ChvmError::VmAmbiguous("abc".to_string(), "abc123, abcdef".to_string());
+        assert_eq!(
+            err.to_string(),
+            "Ambiguous VM identifier 'abc', matches: abc123, abcdef"
+        );
     }
 
     #[test]

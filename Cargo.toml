@@ -35,6 +35,7 @@ hyperlocal = "0.9"
 
 # CLI
 clap = { version = "4.5", features = ["derive"] }
+clap_complete = { version = "4.5", features = ["unstable-dynamic"] }
 
 # OCI
 oci-distribution = { version = "0.11", default-features = false, features = ["rustls-tls"] }

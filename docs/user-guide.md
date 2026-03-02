@@ -16,6 +16,33 @@ chvm [--verbose] <command>
 
 ---
 
+### VM Name/ID Resolution
+
+All commands that accept a `<CONTAINER>` argument resolve it in this order:
+
+1. **Exact ID** -- `chvm stop a1b2c3d4e5f6`
+2. **Exact name** -- `chvm stop myvm`
+3. **Unique ID prefix** -- `chvm stop a1b` (must match exactly one VM)
+
+If a prefix matches multiple VMs, you'll get an error listing the ambiguous matches.
+
+### Shell Completions
+
+Tab completion for commands, flags, and VM names/IDs is installed automatically by `make install`. To activate in your current session:
+
+```bash
+source ~/.local/share/bash-completion/completions/chvm
+```
+
+For zsh or fish, generate completions manually:
+
+```bash
+source <(COMPLETE=zsh chvm)    # zsh
+source <(COMPLETE=fish chvm)   # fish
+```
+
+---
+
 ### chvm pull
 
 Pull an OCI image from a container registry.
@@ -115,7 +142,7 @@ Start a created or stopped VM.
 chvm start <CONTAINER>
 ```
 
-`<CONTAINER>` can be the VM name or ID.
+`<CONTAINER>` can be the VM name, full ID, or a unique ID prefix.
 
 ---
 
