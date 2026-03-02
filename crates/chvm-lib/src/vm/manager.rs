@@ -9,8 +9,6 @@ use crate::utils::{atomic_write, FileLock};
 
 /// Maximum retries when probing for mycelium IPv6 address after VM boot.
 const MYCELIUM_PROBE_MAX_RETRIES: usize = 10;
-/// Initial delay before first mycelium IP probe (seconds).
-const MYCELIUM_PROBE_INITIAL_DELAY: u64 = 3;
 /// Delay between mycelium IP probe retries (seconds).
 const MYCELIUM_PROBE_RETRY_DELAY: u64 = 2;
 use crate::error::{ChvmError, Result};
@@ -533,10 +531,7 @@ impl VmManager {
     /// Check mycelium health for a running VM by probing the guest.
     /// Uses a single-attempt probe (no retry loop) for fast results.
     /// Returns the health status and updates persisted state.
-    pub async fn check_mycelium_health(
-        &mut self,
-        id_or_name: &str,
-    ) -> Result<MyceliumHealth> {
+    pub async fn check_mycelium_health(&mut self, id_or_name: &str) -> Result<MyceliumHealth> {
         let state = self.state_store.resolve_clone(id_or_name)?;
 
         if state.status != VmState::Running {
@@ -559,14 +554,21 @@ impl VmManager {
         let health = match &probed_ip {
             Some(_) => MyceliumHealth::Healthy,
             None => {
-                let pgrep_opts = ExecOptions {
-                    cmd: vec!["pgrep".into(), "-x".into(), "mycelium".into()],
+                // Use sh + ps + grep — universally available across all images
+                let ps_opts = ExecOptions {
+                    cmd: vec![
+                        "sh".into(),
+                        "-c".into(),
+                        "ps aux 2>/dev/null | grep '[m]ycelium' || ps 2>/dev/null | grep '[m]ycelium'".into(),
+                    ],
                     env: vec![],
                     working_dir: None,
                 };
 
+                // If exec_capture fails (vsock unreachable), matches! returns false,
+                // which correctly maps to Unhealthy — guest is not responding.
                 let process_alive = matches!(
-                    crate::vsock::proxy::exec_capture(&vsock_path, &pgrep_opts).await,
+                    crate::vsock::proxy::exec_capture(&vsock_path, &ps_opts).await,
                     Ok((0, _))
                 );
 
@@ -592,7 +594,9 @@ impl VmManager {
             }
             ns.mycelium_health = Some(health);
         }
-        let _ = self.state_store.save(&updated);
+        if let Err(e) = self.state_store.save(&updated) {
+            warn!(vm_id = %updated.id, error = %e, "Failed to persist mycelium health update");
+        }
 
         Ok(health)
     }
@@ -882,18 +886,19 @@ impl VmManager {
         let vsock_path = state.vm_config.vsock_socket_path()?;
 
         for attempt in 0..MYCELIUM_PROBE_MAX_RETRIES {
-            let delay = if attempt == 0 {
-                MYCELIUM_PROBE_INITIAL_DELAY
-            } else {
-                MYCELIUM_PROBE_RETRY_DELAY
-            };
-            tokio::time::sleep(std::time::Duration::from_secs(delay)).await;
+            if attempt > 0 {
+                tokio::time::sleep(std::time::Duration::from_secs(MYCELIUM_PROBE_RETRY_DELAY))
+                    .await;
+            }
 
             if let Some(ip) = self.probe_mycelium_ip(&vsock_path).await {
                 return Some(ip);
             }
 
-            debug!(attempt = attempt, "Mycelium IP probe attempt failed, retrying");
+            debug!(
+                attempt = attempt,
+                "Mycelium IP probe attempt failed, retrying"
+            );
         }
 
         warn!("Could not detect mycelium IP after retries");

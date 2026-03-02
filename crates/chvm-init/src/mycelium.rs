@@ -58,7 +58,7 @@ pub fn setup_mycelium() -> Result<Option<MyceliumConfig>, Box<dyn std::error::Er
 }
 
 /// Spawn the mycelium daemon, returning its PID on success.
-pub fn spawn_mycelium(config: &MyceliumConfig) -> Option<u32> {
+pub fn spawn_mycelium(config: &MyceliumConfig) -> Option<i32> {
     println!("[init] Starting mycelium...");
 
     match Command::new(&config.binary)
@@ -68,7 +68,7 @@ pub fn spawn_mycelium(config: &MyceliumConfig) -> Option<u32> {
         .spawn()
     {
         Ok(child) => {
-            let pid = child.id();
+            let pid = child.id() as i32;
             println!("[init] Mycelium started (PID {pid})");
             Some(pid)
         }

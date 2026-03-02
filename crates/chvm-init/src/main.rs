@@ -12,6 +12,8 @@ mod vsock_server;
 
 use std::process::Command;
 
+const MYCELIUM_INTERFACE_SETTLE_SECS: u64 = 3;
+
 fn main() {
     println!("[init] CHVM guest init starting...");
 
@@ -52,12 +54,16 @@ fn main() {
         eprintln!("[init] Warning: Failed to mount volumes: {e}");
     }
 
+    signal::block_sigchld();
+
     // Setup and spawn mycelium if configured
     let mycelium_state = match mycelium::setup_mycelium() {
         Ok(Some(config)) => {
             let pid = mycelium::spawn_mycelium(&config);
-            // Wait for interface to come up before host-side probing
-            std::thread::sleep(std::time::Duration::from_secs(3));
+            // Wait for TUN interface to come up before host-side probing
+            std::thread::sleep(std::time::Duration::from_secs(
+                MYCELIUM_INTERFACE_SETTLE_SECS,
+            ));
             pid.map(|p| (p, config))
         }
         Ok(None) => None,
@@ -117,7 +123,7 @@ fn main() {
 
     match child {
         Ok(mut child) => {
-            // Setup zombie reaping (and mycelium supervision) in background
+            // Setup zombie reaping (and mycelium supervision) in background.
             std::thread::spawn(move || signal::reap_zombies(mycelium_state));
 
             let status = child.wait().unwrap_or_else(|e| {
