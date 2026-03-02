@@ -4,6 +4,7 @@ use nix::unistd::Pid;
 use crate::mycelium::MyceliumConfig;
 
 const MYCELIUM_RESTART_DELAY: std::time::Duration = std::time::Duration::from_secs(2);
+const MYCELIUM_SPAWN_RETRY_DELAY: std::time::Duration = std::time::Duration::from_secs(2);
 const MYCELIUM_SPAWN_RETRIES: u32 = 5;
 
 /// Block SIGCHLD on the calling thread. Must be called on the main thread
@@ -88,7 +89,7 @@ fn try_spawn_mycelium(config: &MyceliumConfig) -> Option<i32> {
         }
         eprintln!("[init] Mycelium spawn attempt {attempt}/{MYCELIUM_SPAWN_RETRIES} failed",);
         if attempt < MYCELIUM_SPAWN_RETRIES {
-            std::thread::sleep(MYCELIUM_RESTART_DELAY);
+            std::thread::sleep(MYCELIUM_SPAWN_RETRY_DELAY);
         }
     }
     eprintln!("[init] Mycelium spawn failed after {MYCELIUM_SPAWN_RETRIES} attempts, giving up");

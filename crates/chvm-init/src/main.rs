@@ -12,8 +12,6 @@ mod vsock_server;
 
 use std::process::Command;
 
-const MYCELIUM_INTERFACE_SETTLE_SECS: u64 = 3;
-
 fn main() {
     println!("[init] CHVM guest init starting...");
 
@@ -58,14 +56,7 @@ fn main() {
 
     // Setup and spawn mycelium if configured
     let mycelium_state = match mycelium::setup_mycelium() {
-        Ok(Some(config)) => {
-            let pid = mycelium::spawn_mycelium(&config);
-            // Wait for TUN interface to come up before host-side probing
-            std::thread::sleep(std::time::Duration::from_secs(
-                MYCELIUM_INTERFACE_SETTLE_SECS,
-            ));
-            pid.map(|p| (p, config))
-        }
+        Ok(Some(config)) => mycelium::spawn_mycelium(&config).map(|pid| (pid, config)),
         Ok(None) => None,
         Err(e) => {
             eprintln!("[init] Warning: Failed to setup mycelium: {e}");

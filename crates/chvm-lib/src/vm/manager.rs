@@ -9,8 +9,8 @@ use crate::utils::{atomic_write, FileLock};
 
 /// Maximum retries when probing for mycelium IPv6 address after VM boot.
 const MYCELIUM_PROBE_MAX_RETRIES: usize = 10;
-/// Delay between mycelium IP probe retries (seconds).
-const MYCELIUM_PROBE_RETRY_DELAY: u64 = 2;
+/// Delay between mycelium IP probe retries.
+const MYCELIUM_PROBE_RETRY_DELAY: std::time::Duration = std::time::Duration::from_secs(2);
 use crate::error::{ChvmError, Result};
 use crate::hypervisor;
 use crate::network::{self, NetworkBackend, SetupConfig};
@@ -532,16 +532,19 @@ impl VmManager {
     /// Uses a single-attempt probe (no retry loop) for fast results.
     /// Returns the health status and updates persisted state.
     pub async fn check_mycelium_health(&mut self, id_or_name: &str) -> Result<MyceliumHealth> {
-        let state = self.state_store.resolve_clone(id_or_name)?;
+        let mut state = self.state_store.resolve_clone(id_or_name)?;
 
         if state.status != VmState::Running {
             return Ok(MyceliumHealth::Unknown);
         }
 
-        match state.network_state.as_ref() {
-            Some(ns) if ns.mycelium_enabled => ns,
-            _ => return Ok(MyceliumHealth::Unknown),
-        };
+        let mycelium_enabled = state
+            .network_state
+            .as_ref()
+            .is_some_and(|ns| ns.mycelium_enabled);
+        if !mycelium_enabled {
+            return Ok(MyceliumHealth::Unknown);
+        }
 
         let vsock_path = match state.vm_config.vsock_socket_path() {
             Some(p) => p,
@@ -573,8 +576,6 @@ impl VmManager {
                 );
 
                 if process_alive {
-                    // Process is alive but has no IP — may still be converging.
-                    // Callers should track how long this persists.
                     MyceliumHealth::Unknown
                 } else {
                     warn!(vm_id = %state.id, "Mycelium process not running in guest");
@@ -584,18 +585,17 @@ impl VmManager {
         };
 
         // Update persisted state
-        let mut updated = state.clone();
-        if let Some(ref mut ns) = updated.network_state {
+        if let Some(ref mut ns) = state.network_state {
             if let Some(ref ip) = probed_ip {
                 if ns.mycelium_ip.as_deref() != Some(ip) {
-                    info!(vm_id = %updated.id, mycelium_ip = %ip, "Mycelium IP updated");
+                    info!(vm_id = %state.id, mycelium_ip = %ip, "Mycelium IP updated");
                     ns.mycelium_ip = Some(ip.clone());
                 }
             }
             ns.mycelium_health = Some(health);
         }
-        if let Err(e) = self.state_store.save(&updated) {
-            warn!(vm_id = %updated.id, error = %e, "Failed to persist mycelium health update");
+        if let Err(e) = self.state_store.save(&state) {
+            warn!(vm_id = %state.id, error = %e, "Failed to persist mycelium health update");
         }
 
         Ok(health)
@@ -838,10 +838,9 @@ impl VmManager {
 
         if let Ok((0, output)) = crate::vsock::proxy::exec_capture(vsock_path, &ip_opts).await {
             for line in output.lines() {
-                if let Some(inet6_pos) = line.find("inet6 ") {
-                    let addr_part = &line[inet6_pos + 6..];
-                    if let Some(slash) = addr_part.find('/') {
-                        let ip = addr_part[..slash].trim();
+                if let Some((_, rest)) = line.split_once("inet6 ") {
+                    if let Some((ip_raw, _)) = rest.split_once('/') {
+                        let ip = ip_raw.trim();
                         if !ip.starts_with("fe80") {
                             return Some(ip.to_string());
                         }
@@ -887,8 +886,7 @@ impl VmManager {
 
         for attempt in 0..MYCELIUM_PROBE_MAX_RETRIES {
             if attempt > 0 {
-                tokio::time::sleep(std::time::Duration::from_secs(MYCELIUM_PROBE_RETRY_DELAY))
-                    .await;
+                tokio::time::sleep(MYCELIUM_PROBE_RETRY_DELAY).await;
             }
 
             if let Some(ip) = self.probe_mycelium_ip(&vsock_path).await {
