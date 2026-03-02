@@ -212,12 +212,14 @@ else
     fail "Mycelium IP visible in chvm inspect" "mycelium_ip not found in inspect output"
 fi
 
-# --- Test: Mycelium health status visible via inspect ---
+# --- Test: Mycelium health status is healthy via inspect ---
 
-if echo "$vm1_inspect_ip" | grep -q "mycelium_health"; then
-    pass "Mycelium health visible in chvm inspect"
+if echo "$vm1_inspect_ip" | grep -q '"mycelium_health": "healthy"'; then
+    pass "Mycelium health is 'healthy' in initial inspect"
+elif echo "$vm1_inspect_ip" | grep -q "mycelium_health"; then
+    fail "Mycelium health is 'healthy' in initial inspect" "$(echo "$vm1_inspect_ip" | grep mycelium_health)"
 else
-    skip "Mycelium health visible in chvm inspect" "mycelium_health not in inspect output (health check may not have run)"
+    fail "Mycelium health is 'healthy' in initial inspect" "mycelium_health field not found in inspect output"
 fi
 
 # === Mycelium Auto-Restart Tests ===
@@ -246,6 +248,17 @@ if [ -n "$original_pid" ]; then
         pass "Mycelium process killed successfully"
     else
         fail "Mycelium process killed successfully" "PID $original_pid still running"
+    fi
+
+    # --- Test: Health status shows unhealthy while mycelium is dead ---
+
+    if [ -z "$dead_check" ]; then
+        killed_health=$($CHVM inspect "$VM1_NAME" 2>&1) || true
+        if echo "$killed_health" | grep -q '"mycelium_health": "unhealthy"'; then
+            pass "Mycelium health is 'unhealthy' after kill"
+        else
+            skip "Mycelium health is 'unhealthy' after kill" "$(echo "$killed_health" | grep mycelium_health || echo 'field not found')"
+        fi
     fi
 
     # Wait for the supervisor to restart it (2s delay + spawn time)
@@ -283,6 +296,15 @@ if [ -n "$original_pid" ]; then
             pass "Mycelium IPv6 address recovered after restart ($RECOVERED_IP)"
         else
             fail "Mycelium IPv6 address recovered after restart" "No global inet6 after 10s"
+        fi
+
+        # --- Test: Health status shows healthy after restart ---
+
+        health_inspect=$($CHVM inspect "$VM1_NAME" 2>&1) || true
+        if echo "$health_inspect" | grep -q '"mycelium_health": "healthy"'; then
+            pass "Mycelium health is 'healthy' after restart"
+        else
+            fail "Mycelium health is 'healthy' after restart" "$(echo "$health_inspect" | grep mycelium_health || echo 'field not found')"
         fi
     fi
 else

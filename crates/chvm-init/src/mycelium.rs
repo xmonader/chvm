@@ -61,20 +61,13 @@ pub fn setup_mycelium() -> Result<Option<MyceliumConfig>, Box<dyn std::error::Er
 pub fn spawn_mycelium(config: &MyceliumConfig) -> Option<i32> {
     println!("[init] Starting mycelium...");
 
-    match Command::new(&config.binary)
+    let child = Command::new(&config.binary)
         .args(&config.args)
-        .stdout(std::process::Stdio::inherit())
-        .stderr(std::process::Stdio::inherit())
         .spawn()
-    {
-        Ok(child) => {
-            let pid = child.id() as i32;
-            println!("[init] Mycelium started (PID {pid})");
-            Some(pid)
-        }
-        Err(e) => {
-            eprintln!("[init] Failed to start mycelium: {e}");
-            None
-        }
-    }
+        .map_err(|e| eprintln!("[init] Failed to start mycelium: {e}"))
+        .ok()?;
+
+    let pid = child.id() as i32;
+    println!("[init] Mycelium started (PID {pid})");
+    Some(pid)
 }

@@ -520,6 +520,9 @@ impl VmManager {
                 let mut updated = state;
                 updated.status = VmState::Stopped;
                 updated.stopped_at = Some(Utc::now());
+                if let Some(ref mut ns) = updated.network_state {
+                    ns.mycelium_health = None;
+                }
                 if let Err(e) = self.state_store.save(&updated) {
                     warn!(vm_id = %id, error = %e, "Failed to persist stopped status");
                 }
@@ -551,49 +554,56 @@ impl VmManager {
             None => return Ok(MyceliumHealth::Unknown),
         };
 
-        // Single-attempt probe — no retry loop, suitable for on-demand health checks
-        let probed_ip = self.probe_mycelium_ip(&vsock_path).await;
+        // Single-attempt probe with timeout
+        let health_timeout = std::time::Duration::from_secs(10);
 
-        let health = match &probed_ip {
-            Some(_) => MyceliumHealth::Healthy,
-            None => {
-                // Use sh + ps + grep — universally available across all images
-                let ps_opts = ExecOptions {
-                    cmd: vec![
-                        "sh".into(),
-                        "-c".into(),
-                        "ps aux 2>/dev/null | grep '[m]ycelium' || ps 2>/dev/null | grep '[m]ycelium'".into(),
-                    ],
-                    env: vec![],
-                    working_dir: None,
-                };
+        let probed_ip = tokio::time::timeout(health_timeout, self.probe_mycelium_ip(&vsock_path))
+            .await
+            .ok()
+            .flatten();
 
-                // If exec_capture fails (vsock unreachable), matches! returns false,
-                // which correctly maps to Unhealthy — guest is not responding.
-                let process_alive = matches!(
-                    crate::vsock::proxy::exec_capture(&vsock_path, &ps_opts).await,
-                    Ok((0, _))
-                );
+        // Check if we already have a known IP from a previous probe (e.g. boot-time)
+        let known_ip = state
+            .network_state
+            .as_ref()
+            .and_then(|ns| ns.mycelium_ip.as_deref())
+            .filter(|ip| !ip.is_empty());
 
-                if process_alive {
-                    MyceliumHealth::Unknown
-                } else {
-                    warn!(vm_id = %state.id, "Mycelium process not running in guest");
-                    MyceliumHealth::Unhealthy
+        let health = match (&probed_ip, known_ip) {
+            (Some(_), _) => MyceliumHealth::Healthy,
+            (None, None) => tokio::time::timeout(
+                health_timeout,
+                self.check_mycelium_process(&vsock_path, &state.id),
+            )
+            .await
+            .unwrap_or(MyceliumHealth::Unknown),
+            (None, Some(_)) => {
+                let process_status = tokio::time::timeout(
+                    health_timeout,
+                    self.check_mycelium_process(&vsock_path, &state.id),
+                )
+                .await
+                .unwrap_or(MyceliumHealth::Unknown);
+                match process_status {
+                    MyceliumHealth::Unknown => MyceliumHealth::Healthy,
+                    other => other,
                 }
             }
         };
 
         // Update persisted state
-        if let Some(ref mut ns) = state.network_state {
-            if let Some(ref ip) = probed_ip {
-                if ns.mycelium_ip.as_deref() != Some(ip) {
-                    info!(vm_id = %state.id, mycelium_ip = %ip, "Mycelium IP updated");
-                    ns.mycelium_ip = Some(ip.clone());
-                }
+        let Some(ref mut ns) = state.network_state else {
+            return Ok(health);
+        };
+
+        if let Some(ref ip) = probed_ip {
+            if ns.mycelium_ip.as_deref() != Some(ip) {
+                info!(vm_id = %state.id, mycelium_ip = %ip, "Mycelium IP updated");
+                ns.mycelium_ip = Some(ip.clone());
             }
-            ns.mycelium_health = Some(health);
         }
+        ns.mycelium_health = Some(health);
+
         if let Err(e) = self.state_store.save(&state) {
             warn!(vm_id = %state.id, error = %e, "Failed to persist mycelium health update");
         }
@@ -815,6 +825,31 @@ impl VmManager {
         Ok(())
     }
 
+    async fn check_mycelium_process(&self, vsock_path: &str, vm_id: &str) -> MyceliumHealth {
+        let ps_opts = ExecOptions {
+            cmd: vec![
+                "sh".into(),
+                "-c".into(),
+                "ps aux 2>/dev/null | grep '[m]ycelium' || ps 2>/dev/null | grep '[m]ycelium'"
+                    .into(),
+            ],
+            env: vec![],
+            working_dir: None,
+        };
+
+        let process_alive = matches!(
+            crate::vsock::proxy::exec_capture(vsock_path, &ps_opts).await,
+            Ok((0, _))
+        );
+
+        if process_alive {
+            MyceliumHealth::Unknown
+        } else {
+            warn!(vm_id = %vm_id, "Mycelium process not running in guest");
+            MyceliumHealth::Unhealthy
+        }
+    }
+
     /// Probe the guest for its mycelium IPv6 address via vsock.
     /// Tries `ip` command first, falls back to reading /proc/net/if_inet6
     /// for images that don't have iproute2 installed (e.g. nginx, redis).
@@ -837,15 +872,8 @@ impl VmManager {
         };
 
         if let Ok((0, output)) = crate::vsock::proxy::exec_capture(vsock_path, &ip_opts).await {
-            for line in output.lines() {
-                if let Some((_, rest)) = line.split_once("inet6 ") {
-                    if let Some((ip_raw, _)) = rest.split_once('/') {
-                        let ip = ip_raw.trim();
-                        if !ip.starts_with("fe80") {
-                            return Some(ip.to_string());
-                        }
-                    }
-                }
+            if let Some(ip) = parse_ip_command_output(&output) {
+                return Some(ip);
             }
         }
 
@@ -857,22 +885,8 @@ impl VmManager {
         };
 
         if let Ok((0, output)) = crate::vsock::proxy::exec_capture(vsock_path, &proc_opts).await {
-            for line in output.lines() {
-                let parts: Vec<&str> = line.split_whitespace().collect();
-                if parts.len() >= 6 && parts[5] == "mycelium" {
-                    let hex_addr = parts[0];
-                    if hex_addr.len() == 32 {
-                        // Parse into Ipv6Addr for canonical formatting
-                        let groups: [u16; 8] = std::array::from_fn(|i| {
-                            u16::from_str_radix(&hex_addr[i * 4..i * 4 + 4], 16).unwrap_or(0)
-                        });
-                        let addr = std::net::Ipv6Addr::from(groups);
-                        let ip = addr.to_string();
-                        if !ip.starts_with("fe80") {
-                            return Some(ip);
-                        }
-                    }
-                }
+            if let Some(ip) = parse_if_inet6_output(&output, "mycelium") {
+                return Some(ip);
             }
         }
 
@@ -1008,6 +1022,41 @@ fn validate_rootfs(path: &Path) -> Result<()> {
 
 /// Check if a process is running AND is a cloud-hypervisor instance.
 /// Prevents PID reuse attacks where an unrelated process reuses the PID.
+/// Parse `ip -6 -o addr show` output for a non-link-local IPv6 address.
+fn parse_ip_command_output(output: &str) -> Option<String> {
+    for line in output.lines() {
+        let (_, rest) = line.split_once("inet6 ")?;
+        let (ip_raw, _) = rest.split_once('/')?;
+        let ip = ip_raw.trim();
+        if !ip.starts_with("fe80") {
+            return Some(ip.to_string());
+        }
+    }
+    None
+}
+
+/// Parse `/proc/net/if_inet6` output for a non-link-local IPv6 on the given interface.
+fn parse_if_inet6_output(output: &str, iface: &str) -> Option<String> {
+    for line in output.lines() {
+        let parts: Vec<&str> = line.split_whitespace().collect();
+        if parts.len() < 6 || parts[5] != iface {
+            continue;
+        }
+        let hex_addr = parts[0];
+        if hex_addr.len() != 32 {
+            continue;
+        }
+        let groups: [u16; 8] = std::array::from_fn(|i| {
+            u16::from_str_radix(&hex_addr[i * 4..i * 4 + 4], 16).unwrap_or(0)
+        });
+        let ip = std::net::Ipv6Addr::from(groups).to_string();
+        if !ip.starts_with("fe80") {
+            return Some(ip);
+        }
+    }
+    None
+}
+
 fn process_running(pid: i32) -> bool {
     if pid <= 0 {
         return false;

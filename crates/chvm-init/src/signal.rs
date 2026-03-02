@@ -16,7 +16,7 @@ pub fn block_sigchld() {
     if let Err(e) =
         nix::sys::signal::sigprocmask(nix::sys::signal::SigmaskHow::SIG_BLOCK, Some(&mask), None)
     {
-        eprintln!("[init] Fatal: failed to block SIGCHLD: {e}");
+        eprintln!("[init] Warning: failed to block SIGCHLD: {e}");
     }
 }
 
@@ -30,6 +30,7 @@ pub fn reap_zombies(mycelium: Option<(i32, MyceliumConfig)>) {
 
     // Pending restart: set when mycelium dies, cleared after respawn
     let mut restart_after: Option<std::time::Instant> = None;
+    let mut spawn_attempts: u32 = 0;
 
     let mut mask = nix::sys::signal::SigSet::empty();
     mask.add(nix::sys::signal::Signal::SIGCHLD);
@@ -70,30 +71,34 @@ pub fn reap_zombies(mycelium: Option<(i32, MyceliumConfig)>) {
         }
 
         // Handle pending mycelium restart without blocking the reap loop
-        if let Some(deadline) = restart_after {
-            if std::time::Instant::now() >= deadline {
-                restart_after = None;
-                if let Some(ref config) = mycelium_config {
-                    mycelium_pid = try_spawn_mycelium(config);
-                }
-            }
+        let ready = restart_after.is_some_and(|d| std::time::Instant::now() >= d);
+        if !ready {
+            continue;
         }
-    }
-}
 
-/// Try to spawn mycelium with retries on failure.
-fn try_spawn_mycelium(config: &MyceliumConfig) -> Option<i32> {
-    for attempt in 1..=MYCELIUM_SPAWN_RETRIES {
+        let Some(ref config) = mycelium_config else {
+            restart_after = None;
+            continue;
+        };
+
+        spawn_attempts += 1;
         if let Some(pid) = crate::mycelium::spawn_mycelium(config) {
-            return Some(pid);
-        }
-        eprintln!("[init] Mycelium spawn attempt {attempt}/{MYCELIUM_SPAWN_RETRIES} failed",);
-        if attempt < MYCELIUM_SPAWN_RETRIES {
-            std::thread::sleep(MYCELIUM_SPAWN_RETRY_DELAY);
+            mycelium_pid = Some(pid);
+            restart_after = None;
+            spawn_attempts = 0;
+        } else if spawn_attempts < MYCELIUM_SPAWN_RETRIES {
+            eprintln!(
+                "[init] Mycelium spawn attempt {spawn_attempts}/{MYCELIUM_SPAWN_RETRIES} failed, retrying..."
+            );
+            restart_after = Some(std::time::Instant::now() + MYCELIUM_SPAWN_RETRY_DELAY);
+        } else {
+            eprintln!(
+                "[init] Mycelium spawn failed after {MYCELIUM_SPAWN_RETRIES} attempts, giving up"
+            );
+            restart_after = None;
+            spawn_attempts = 0;
         }
     }
-    eprintln!("[init] Mycelium spawn failed after {MYCELIUM_SPAWN_RETRIES} attempts, giving up");
-    None
 }
 
 /// Power off the VM.
