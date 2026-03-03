@@ -105,7 +105,8 @@ impl StateStore {
             0 => Err(ChvmError::VmNotFound(prefix.to_string())),
             1 => Ok(matches[0]),
             _ => {
-                let ids: Vec<&str> = matches.iter().map(|s| s.id.as_str()).collect();
+                let mut ids: Vec<&str> = matches.iter().map(|s| s.id.as_str()).collect();
+                ids.sort_unstable();
                 Err(ChvmError::VmAmbiguous(prefix.to_string(), ids.join(", ")))
             }
         }
