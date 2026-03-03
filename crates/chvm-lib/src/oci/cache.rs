@@ -117,8 +117,6 @@ impl ImageCache {
     }
 
     pub fn get(&self, reference: &str) -> Result<CachedImage> {
-        let _lock = FileLock::shared(&self.index_path())?;
-
         // Try by digest
         let digest = sanitize_digest(reference);
         if let Some(img) = self.index.images.get(&digest) {

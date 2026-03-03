@@ -56,6 +56,7 @@ impl FileLock {
     }
 
     /// Get the path of the lock file.
+    #[allow(dead_code)]
     pub fn path(&self) -> &Path {
         &self.path
     }

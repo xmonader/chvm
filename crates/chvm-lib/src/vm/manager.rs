@@ -69,14 +69,15 @@ impl StateStore {
     fn load_state(&self, vm_id: &str) -> Result<RuntimeState> {
         let state_path = self.state_path(vm_id);
         let _lock = FileLock::shared(&state_path)?;
-        let data = std::fs::read_to_string(&state_path)?;
-        Ok(serde_json::from_str(&data)?)
+        self.load_state_inner(vm_id)
     }
 
-    fn reload_state(&mut self, vm_id: &str) -> Result<()> {
-        let state = self.load_state(vm_id)?;
-        self.states.insert(vm_id.to_string(), state);
-        Ok(())
+    /// Load state from disk without acquiring a lock.
+    /// Use when the caller already holds the lock.
+    fn load_state_inner(&self, vm_id: &str) -> Result<RuntimeState> {
+        let state_path = self.state_path(vm_id);
+        let data = std::fs::read_to_string(&state_path)?;
+        Ok(serde_json::from_str(&data)?)
     }
 
     pub fn save(&mut self, state: &RuntimeState) -> Result<()> {
@@ -115,7 +116,8 @@ impl StateStore {
     /// This also reloads the state from disk to get the latest version.
     pub fn resolve_clone(&mut self, id_or_name: &str) -> Result<RuntimeState> {
         let vm_id = self.resolve(id_or_name)?.id.clone();
-        self.reload_state(&vm_id)?;
+        let state = self.load_state(&vm_id)?;
+        self.states.insert(vm_id.clone(), state);
         self.states
             .get(&vm_id)
             .cloned()
@@ -143,7 +145,8 @@ impl StateStore {
         let state_path = self.state_path(vm_id);
         let _lock = FileLock::exclusive(&state_path)?;
 
-        self.reload_state(vm_id)?;
+        let state = self.load_state_inner(vm_id)?;
+        self.states.insert(vm_id.to_string(), state);
 
         let state = self
             .states
