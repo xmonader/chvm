@@ -16,6 +16,8 @@ chvm lets you pull OCI container images and run them as hardware-isolated virtua
 - **Exec & attach** -- Execute commands or get an interactive shell via vsock
 - **Kernel management** -- Extract, select, and check host kernels automatically
 - **Resource control** -- Configure vCPUs, memory, environment variables per VM
+- **Short ID resolution** -- Reference VMs by name, full ID, or unique ID prefix (e.g., `chvm stop a1b`)
+- **Tab completion** -- Dynamic shell completions for commands, flags, and VM names/IDs
 
 ## Requirements
 
@@ -39,10 +41,8 @@ rustup target add x86_64-unknown-linux-musl
 # Build everything (host CLI + statically-linked guest init)
 make build
 
-# Binary is at ./target/release/chvm
-# Optionally install system-wide:
-sudo cp target/release/chvm /usr/local/bin/
-sudo cp target/release/chvm-init /usr/local/bin/
+# Install binaries and shell completions
+make install
 ```
 
 ### System Setup

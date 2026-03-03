@@ -44,11 +44,15 @@ fmt-check:
 clippy:
 	cargo clippy --workspace -- -D warnings
 
-# Install binaries to ~/.cargo/bin and ~/.chvm/bin
+# Install binaries and shell completions
 install: build
-	mkdir -p ~/.cargo/bin ~/.chvm/bin
+	mkdir -p ~/.cargo/bin
 	cp target/$(MUSL_TARGET)/release/chvm ~/.cargo/bin/chvm
-	cp target/$(MUSL_TARGET)/release/chvm-init ~/.chvm/bin/chvm-init
+	doas mkdir -p ~/.chvm/bin
+	doas cp target/$(MUSL_TARGET)/release/chvm-init ~/.chvm/bin/chvm-init
+	mkdir -p ~/.local/share/bash-completion/completions
+	COMPLETE=bash ~/.cargo/bin/chvm > ~/.local/share/bash-completion/completions/chvm
+	cp scripts/doas-completion.bash ~/.local/share/bash-completion/completions/doas
 
 # Run chvm doctor
 doctor: build

@@ -25,15 +25,19 @@ rustup target add x86_64-unknown-linux-musl
 make build
 ```
 
-The binaries are now at:
-- `./target/release/chvm` -- the main CLI
-- `./target/x86_64-unknown-linux-musl/release/chvm-init` -- the guest init
-
-Optionally install system-wide:
+Install the binaries and shell completions:
 
 ```bash
-sudo cp target/release/chvm /usr/local/bin/
+make install
 ```
+
+This places `chvm` in `~/.cargo/bin/`, `chvm-init` in `~/.chvm/bin/`, and installs bash tab completions. After installation, restart your shell or run:
+
+```bash
+source ~/.local/share/bash-completion/completions/chvm
+```
+
+You can now tab-complete commands, flags, and VM names/IDs.
 
 ## Step 2: Check System Requirements
 
