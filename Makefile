@@ -52,7 +52,7 @@ install: build
 	doas cp target/$(MUSL_TARGET)/release/chvm-init ~/.chvm/bin/chvm-init
 	mkdir -p ~/.local/share/bash-completion/completions
 	COMPLETE=bash ~/.cargo/bin/chvm > ~/.local/share/bash-completion/completions/chvm
-	cat scripts/doas-completion.bash >> ~/.local/share/bash-completion/completions/chvm
+	cp scripts/doas-completion.bash ~/.local/share/bash-completion/completions/doas
 
 # Run chvm doctor
 doctor: build
