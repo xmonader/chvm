@@ -1,6 +1,80 @@
+use std::fs::File;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
+use nix::fcntl::{Flock, FlockArg};
 use tracing::debug;
+
+/// A file lock guard that releases the lock when dropped.
+/// Uses flock() for advisory locking.
+pub struct FileLock {
+    _flock: Flock<File>,
+    path: PathBuf,
+}
+
+impl FileLock {
+    /// Acquire an exclusive lock on the given path.
+    /// Creates the lock file if it doesn't exist.
+    /// Blocks until the lock is acquired.
+    pub fn exclusive(path: &Path) -> std::io::Result<Self> {
+        let lock_path = path.with_extension("lock");
+        let file = File::options()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .open(&lock_path)?;
+
+        let flock =
+            Flock::lock(file, FlockArg::LockExclusive).map_err(|e| std::io::Error::other(e.1))?;
+
+        Ok(Self {
+            _flock: flock,
+            path: lock_path,
+        })
+    }
+
+    /// Acquire a shared (read) lock on the given path.
+    /// Creates the lock file if it doesn't exist.
+    /// Blocks until the lock is acquired.
+    pub fn shared(path: &Path) -> std::io::Result<Self> {
+        let lock_path = path.with_extension("lock");
+        let file = File::options()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .open(&lock_path)?;
+
+        let flock =
+            Flock::lock(file, FlockArg::LockShared).map_err(|e| std::io::Error::other(e.1))?;
+
+        Ok(Self {
+            _flock: flock,
+            path: lock_path,
+        })
+    }
+
+    /// Get the path of the lock file.
+    #[allow(dead_code)]
+    pub fn path(&self) -> &Path {
+        &self.path
+    }
+}
+
+/// Write data to a file atomically by writing to a temp file and renaming.
+/// This prevents corruption if the process crashes mid-write.
+pub fn atomic_write(path: &Path, data: &[u8]) -> std::io::Result<()> {
+    use std::io::Write;
+
+    let parent = path.parent().unwrap_or(Path::new("."));
+    let mut temp = tempfile::NamedTempFile::new_in(parent)?;
+    temp.write_all(data)?;
+    temp.flush()?;
+    temp.as_file().sync_all()?;
+    temp.persist(path).map_err(|e| e.error)?;
+    Ok(())
+}
 
 /// Run a command and return an error if it fails.
 pub fn run_cmd(cmd: &str, args: &[&str]) -> anyhow::Result<()> {
@@ -177,5 +251,71 @@ mod tests {
                 std::env::remove_var("SUDO_USER");
             }
         }
+    }
+
+    #[test]
+    fn test_file_lock_exclusive() {
+        use tempfile::TempDir;
+
+        let temp_dir = TempDir::new().unwrap();
+        let test_file = temp_dir.path().join("test.json");
+        std::fs::write(&test_file, "{}").unwrap();
+
+        // Should be able to acquire exclusive lock
+        let lock = FileLock::exclusive(&test_file);
+        assert!(lock.is_ok());
+
+        // Lock is released when dropped
+        drop(lock);
+
+        // Should be able to acquire again
+        let lock2 = FileLock::exclusive(&test_file);
+        assert!(lock2.is_ok());
+    }
+
+    #[test]
+    fn test_file_lock_shared() {
+        use tempfile::TempDir;
+
+        let temp_dir = TempDir::new().unwrap();
+        let test_file = temp_dir.path().join("test.json");
+        std::fs::write(&test_file, "{}").unwrap();
+
+        // Should be able to acquire multiple shared locks
+        let lock1 = FileLock::shared(&test_file);
+        assert!(lock1.is_ok());
+
+        let lock2 = FileLock::shared(&test_file);
+        assert!(lock2.is_ok());
+    }
+
+    #[test]
+    fn test_atomic_write() {
+        use tempfile::TempDir;
+
+        let temp_dir = TempDir::new().unwrap();
+        let test_file = temp_dir.path().join("test.json");
+
+        let data = b"{\"key\": \"value\"}";
+        atomic_write(&test_file, data).unwrap();
+
+        let contents = std::fs::read_to_string(&test_file).unwrap();
+        assert_eq!(contents, "{\"key\": \"value\"}");
+    }
+
+    #[test]
+    fn test_atomic_write_overwrites() {
+        use tempfile::TempDir;
+
+        let temp_dir = TempDir::new().unwrap();
+        let test_file = temp_dir.path().join("test.json");
+
+        std::fs::write(&test_file, "old content").unwrap();
+
+        let data = b"new content";
+        atomic_write(&test_file, data).unwrap();
+
+        let contents = std::fs::read_to_string(&test_file).unwrap();
+        assert_eq!(contents, "new content");
     }
 }

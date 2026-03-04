@@ -10,6 +10,7 @@ use crate::oci::image_config::ImageConfig;
 use crate::oci::layer;
 use crate::oci::pull::PullResult;
 use crate::oci::registry::sanitize_digest;
+use crate::utils::{atomic_write, FileLock};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CacheIndex {
@@ -40,16 +41,40 @@ pub struct ImageCache {
 impl ImageCache {
     pub fn new(cache_dir: &Path) -> Result<Self> {
         std::fs::create_dir_all(cache_dir)?;
-        let index = load_index(cache_dir).unwrap_or_else(|_| CacheIndex {
-            images: HashMap::new(),
-        });
+        let index_path = cache_dir.join("index.json");
+        let index = if index_path.exists() {
+            load_index(cache_dir)?
+        } else {
+            CacheIndex {
+                images: HashMap::new(),
+            }
+        };
         Ok(Self {
             cache_dir: cache_dir.to_path_buf(),
             index,
         })
     }
 
+    fn index_path(&self) -> PathBuf {
+        self.cache_dir.join("index.json")
+    }
+
+    fn reload_index(&mut self) -> Result<()> {
+        let path = self.index_path();
+        if !path.exists() {
+            self.index = CacheIndex {
+                images: HashMap::new(),
+            };
+            return Ok(());
+        }
+        self.index = load_index(&self.cache_dir)?;
+        Ok(())
+    }
+
     pub fn add(&mut self, result: &PullResult) -> Result<CachedImage> {
+        let _lock = FileLock::exclusive(&self.index_path())?;
+        self.reload_index()?;
+
         let digest = sanitize_digest(&result.digest);
 
         if let Some(existing) = self.index.images.get_mut(&digest) {
@@ -115,6 +140,9 @@ impl ImageCache {
     }
 
     pub fn remove(&mut self, reference: &str) -> Result<()> {
+        let _lock = FileLock::exclusive(&self.index_path())?;
+        self.reload_index()?;
+
         let digest = sanitize_digest(reference);
         if let Some(img) = self.index.images.remove(&digest) {
             let image_dir = self.cache_dir.join(&digest);
@@ -165,7 +193,9 @@ impl ImageCache {
         layer::extract_layers(&cached.layer_paths, &rootfs_dir)
             .map_err(|e| ChvmError::OciError(format!("failed to extract layers: {e}")))?;
 
-        // Update cache
+        let _lock = FileLock::exclusive(&self.index_path())?;
+        self.reload_index()?;
+
         if let Some(img) = self.index.images.get_mut(&digest) {
             img.rootfs_path = Some(rootfs_dir.to_string_lossy().to_string());
             img.last_used_at = Utc::now();
@@ -180,14 +210,14 @@ impl ImageCache {
     }
 
     fn save_index(&self) -> Result<()> {
-        let path = self.cache_dir.join("index.json");
+        let path = self.index_path();
         let data = serde_json::to_string_pretty(&self.index)?;
-        std::fs::write(path, data)?;
+        atomic_write(&path, data.as_bytes())?;
         Ok(())
     }
 }
 
-fn load_index(cache_dir: &Path) -> anyhow::Result<CacheIndex> {
+fn load_index(cache_dir: &Path) -> Result<CacheIndex> {
     let path = cache_dir.join("index.json");
     let data = std::fs::read_to_string(path)?;
     Ok(serde_json::from_str(&data)?)

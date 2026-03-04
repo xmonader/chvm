@@ -3,7 +3,7 @@ use std::io::{Read, Seek, SeekFrom};
 use crate::cli::LogsArgs;
 use chvm_lib::vm::VmManager;
 
-pub fn execute(manager: &VmManager, args: &LogsArgs) -> anyhow::Result<()> {
+pub fn execute(manager: &mut VmManager, args: &LogsArgs) -> anyhow::Result<()> {
     let logs = manager.logs(&args.container)?;
     print!("{logs}");
 
