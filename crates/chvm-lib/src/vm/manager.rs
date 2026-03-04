@@ -577,18 +577,12 @@ impl VmManager {
             )
             .await
             .unwrap_or(MyceliumHealth::Unknown),
-            (None, Some(_)) => {
-                let process_status = tokio::time::timeout(
-                    health_timeout,
-                    self.check_mycelium_process(&vsock_path, &state.id),
-                )
-                .await
-                .unwrap_or(MyceliumHealth::Unknown);
-                match process_status {
-                    MyceliumHealth::Unknown => MyceliumHealth::Healthy,
-                    other => other,
-                }
-            }
+            (None, Some(_)) => tokio::time::timeout(
+                health_timeout,
+                self.check_mycelium_process(&vsock_path, &state.id),
+            )
+            .await
+            .unwrap_or(MyceliumHealth::Unknown),
         };
 
         // Update persisted state
@@ -843,7 +837,7 @@ impl VmManager {
         );
 
         if process_alive {
-            MyceliumHealth::Unknown
+            MyceliumHealth::Healthy
         } else {
             warn!(vm_id = %vm_id, "Mycelium process not running in guest");
             MyceliumHealth::Unhealthy
@@ -1020,13 +1014,15 @@ fn validate_rootfs(path: &Path) -> Result<()> {
     Ok(())
 }
 
-/// Check if a process is running AND is a cloud-hypervisor instance.
-/// Prevents PID reuse attacks where an unrelated process reuses the PID.
 /// Parse `ip -6 -o addr show` output for a non-link-local IPv6 address.
 fn parse_ip_command_output(output: &str) -> Option<String> {
     for line in output.lines() {
-        let (_, rest) = line.split_once("inet6 ")?;
-        let (ip_raw, _) = rest.split_once('/')?;
+        let Some((_, rest)) = line.split_once("inet6 ") else {
+            continue;
+        };
+        let Some((ip_raw, _)) = rest.split_once('/') else {
+            continue;
+        };
         let ip = ip_raw.trim();
         if !ip.starts_with("fe80") {
             return Some(ip.to_string());

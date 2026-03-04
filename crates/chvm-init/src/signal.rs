@@ -24,9 +24,11 @@ pub fn block_sigchld() {
 /// Blocks on sigwait for SIGCHLD, then reaps all available children.
 /// If a mycelium config is provided, automatically restarts mycelium when
 /// its process is reaped.
-pub fn reap_zombies(mycelium: Option<(i32, MyceliumConfig)>) {
-    let mut mycelium_pid: Option<i32> = mycelium.as_ref().map(|(pid, _)| *pid);
-    let mycelium_config = mycelium.map(|(_, config)| config);
+pub fn reap_zombies(mycelium: Option<(i32, std::process::Child, MyceliumConfig)>) {
+    let (mut mycelium_pid, mut mycelium_child, mycelium_config) = match mycelium {
+        Some((pid, child, config)) => (Some(pid), Some(child), Some(config)),
+        None => (None, None, None),
+    };
 
     // Pending restart: set when mycelium dies, cleared after respawn
     let mut restart_after: Option<std::time::Instant> = None;
@@ -63,6 +65,10 @@ pub fn reap_zombies(mycelium: Option<(i32, MyceliumConfig)>) {
 
             if mycelium_pid == Some(raw_pid) {
                 eprintln!("[init] Mycelium (PID {raw_pid}) exited, scheduling restart...");
+                // Wait on the Child handle to clean up Rust-side resources
+                if let Some(mut child) = mycelium_child.take() {
+                    let _ = child.wait();
+                }
                 mycelium_pid = None;
                 restart_after = Some(std::time::Instant::now() + MYCELIUM_RESTART_DELAY);
             } else {
@@ -82,8 +88,9 @@ pub fn reap_zombies(mycelium: Option<(i32, MyceliumConfig)>) {
         };
 
         spawn_attempts += 1;
-        if let Some(pid) = crate::mycelium::spawn_mycelium(config) {
+        if let Some((pid, child)) = crate::mycelium::spawn_mycelium(config) {
             mycelium_pid = Some(pid);
+            mycelium_child = Some(child);
             restart_after = None;
             spawn_attempts = 0;
         } else if spawn_attempts < MYCELIUM_SPAWN_RETRIES {

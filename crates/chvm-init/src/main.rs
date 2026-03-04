@@ -56,7 +56,9 @@ fn main() {
 
     // Setup and spawn mycelium if configured
     let mycelium_state = match mycelium::setup_mycelium() {
-        Ok(Some(config)) => mycelium::spawn_mycelium(&config).map(|pid| (pid, config)),
+        Ok(Some(config)) => {
+            mycelium::spawn_mycelium(&config).map(|(pid, child)| (pid, child, config))
+        }
         Ok(None) => None,
         Err(e) => {
             eprintln!("[init] Warning: Failed to setup mycelium: {e}");

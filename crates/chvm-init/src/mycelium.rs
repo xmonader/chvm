@@ -1,4 +1,4 @@
-use std::process::Command;
+use std::process::{Command, Stdio};
 
 /// Configuration needed to spawn and supervise the mycelium daemon.
 pub struct MyceliumConfig {
@@ -57,17 +57,19 @@ pub fn setup_mycelium() -> Result<Option<MyceliumConfig>, Box<dyn std::error::Er
     }))
 }
 
-/// Spawn the mycelium daemon, returning its PID on success.
-pub fn spawn_mycelium(config: &MyceliumConfig) -> Option<i32> {
+/// Spawn the mycelium daemon, returning its PID and Child handle on success.
+pub fn spawn_mycelium(config: &MyceliumConfig) -> Option<(i32, std::process::Child)> {
     println!("[init] Starting mycelium...");
 
     let child = Command::new(&config.binary)
         .args(&config.args)
+        .stdout(Stdio::inherit())
+        .stderr(Stdio::inherit())
         .spawn()
         .map_err(|e| eprintln!("[init] Failed to start mycelium: {e}"))
         .ok()?;
 
     let pid = child.id() as i32;
     println!("[init] Mycelium started (PID {pid})");
-    Some(pid)
+    Some((pid, child))
 }
