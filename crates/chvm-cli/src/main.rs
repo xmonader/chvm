@@ -59,7 +59,7 @@ async fn main() -> anyhow::Result<()> {
         Commands::Rm(args) => commands::rm::execute(&mut manager, args).await,
         Commands::Exec(args) => commands::exec::execute(&manager, args).await,
         Commands::Attach(args) => commands::attach::execute(&manager, args).await,
-        Commands::List(args) => commands::list::execute(&mut manager, args),
+        Commands::List(args) => commands::list::execute(&mut manager, args).await,
         Commands::Logs(args) => commands::logs::execute(&mut manager, args),
         Commands::Inspect(args) => commands::inspect::execute(&mut manager, args),
         Commands::Images(args) => commands::images::execute(&manager, args),

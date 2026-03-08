@@ -509,7 +509,9 @@ impl VmManager {
     }
 
     /// Refresh VM statuses by checking process liveness.
-    pub fn refresh_status(&mut self) -> Result<()> {
+    /// When a VM's process is found dead, cleans up network and storage resources
+    /// before marking it as stopped.
+    pub async fn refresh_status(&mut self) -> Result<()> {
         let ids: Vec<String> = self.state_store.states.keys().cloned().collect();
         for id in ids {
             let Some(state) = self.state_store.states.get(&id).cloned() else {
@@ -519,6 +521,16 @@ impl VmManager {
                 && state.vmm_pid > 0
                 && !process_running(state.vmm_pid)
             {
+                info!(vm_id = %id, "Detected dead VM process, cleaning up resources");
+
+                if state.vm_config.network.mode != NetworkMode::None {
+                    if let Err(e) = self.teardown_network(&state).await {
+                        warn!(vm_id = %id, error = %e, "Failed to teardown network for dead VM");
+                    }
+                }
+
+                self.cleanup_storage(&state);
+
                 let mut updated = state;
                 updated.status = VmState::Stopped;
                 updated.stopped_at = Some(Utc::now());
