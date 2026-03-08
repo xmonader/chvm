@@ -555,34 +555,22 @@ impl VmManager {
         };
 
         // Single-attempt probe with timeout
-        let health_timeout = std::time::Duration::from_secs(10);
+        let health_timeout = std::time::Duration::from_secs(5);
 
         let probed_ip = tokio::time::timeout(health_timeout, self.probe_mycelium_ip(&vsock_path))
             .await
             .ok()
             .flatten();
 
-        // Check if we already have a known IP from a previous probe (e.g. boot-time)
-        let known_ip = state
-            .network_state
-            .as_ref()
-            .and_then(|ns| ns.mycelium_ip.as_deref())
-            .filter(|ip| !ip.is_empty());
-
-        let health = match (&probed_ip, known_ip) {
-            (Some(_), _) => MyceliumHealth::Healthy,
-            (None, None) => tokio::time::timeout(
+        let health = if probed_ip.is_some() {
+            MyceliumHealth::Healthy
+        } else {
+            tokio::time::timeout(
                 health_timeout,
                 self.check_mycelium_process(&vsock_path, &state.id),
             )
             .await
-            .unwrap_or(MyceliumHealth::Unknown),
-            (None, Some(_)) => tokio::time::timeout(
-                health_timeout,
-                self.check_mycelium_process(&vsock_path, &state.id),
-            )
-            .await
-            .unwrap_or(MyceliumHealth::Unknown),
+            .unwrap_or(MyceliumHealth::Unknown)
         };
 
         // Update persisted state

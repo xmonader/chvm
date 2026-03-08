@@ -228,7 +228,8 @@ Tests mycelium peer-to-peer IPv6 overlay networking:
 - Both VMs connected to the public peer (TCP ESTABLISHED)
 - VM-to-VM ping via mycelium IPv6 (may skip — route convergence takes ~60s)
 - Mycelium IP visible in `chvm inspect` output
-
+- Mycelium health status reported via `chvm inspect --check-mycelium-health`
+- Mycelium auto-restart after crash
 Requires: mycelium binary at `~/.chvm/bin/mycelium` and internet access to reach the public peer. Skipped entirely if mycelium binary is not found.
 
 ### 14_rootfs.sh -- Rootfs & Storage Backends

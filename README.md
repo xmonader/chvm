@@ -183,6 +183,9 @@ sudo chvm run -d --name myc1 --network mycelium \
 # Inspect to see the mycelium IPv6 address
 sudo chvm inspect myc1 | jq '.network_state.mycelium_ip'
 
+# Check mycelium health status
+sudo chvm inspect myc1 --check-mycelium-health | jq '.network_state.mycelium_health'
+
 # No networking
 sudo chvm run -d --network none alpine:latest sleep 3600
 ```

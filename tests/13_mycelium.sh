@@ -205,7 +205,7 @@ fi
 
 # --- Test: Mycelium address visible via inspect ---
 
-vm1_inspect_ip=$($CHVM inspect "$VM1_NAME" 2>&1) || true
+vm1_inspect_ip=$($CHVM inspect "$VM1_NAME" --check-mycelium-health 2>&1) || true
 if echo "$vm1_inspect_ip" | grep -q "mycelium_ip"; then
     pass "Mycelium IP visible in chvm inspect"
 else
@@ -253,7 +253,7 @@ if [ -n "$original_pid" ]; then
     # --- Test: Health status shows unhealthy while mycelium is dead ---
 
     if [ -z "$dead_check" ]; then
-        killed_health=$($CHVM inspect "$VM1_NAME" 2>&1) || true
+        killed_health=$($CHVM inspect "$VM1_NAME" --check-mycelium-health 2>&1) || true
         if echo "$killed_health" | grep -q '"mycelium_health": "unhealthy"'; then
             pass "Mycelium health is 'unhealthy' after kill"
         else
@@ -300,7 +300,7 @@ if [ -n "$original_pid" ]; then
 
         # --- Test: Health status shows healthy after restart ---
 
-        health_inspect=$($CHVM inspect "$VM1_NAME" 2>&1) || true
+        health_inspect=$($CHVM inspect "$VM1_NAME" --check-mycelium-health 2>&1) || true
         if echo "$health_inspect" | grep -q '"mycelium_health": "healthy"'; then
             pass "Mycelium health is 'healthy' after restart"
         else
