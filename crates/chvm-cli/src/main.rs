@@ -35,7 +35,7 @@ async fn main() -> anyhow::Result<()> {
     // Handle commands that don't need a full manager
     match &cli.command {
         Commands::Version(args) => return commands::version::execute(args),
-        Commands::Doctor(args) => return commands::doctor::execute(args),
+        Commands::Doctor(args) => return commands::doctor::execute(args).await,
         Commands::Setup(args) => return commands::setup::execute(args),
         Commands::Kernel(args) => return commands::kernel::execute(args),
         Commands::Login(args) => return commands::login::execute(args),
