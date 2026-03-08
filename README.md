@@ -15,6 +15,7 @@ chvm lets you pull OCI container images and run them as hardware-isolated virtua
 - **Volume mounts** -- Share host directories with VMs via virtiofs
 - **Exec & attach** -- Execute commands or get an interactive shell via vsock
 - **Kernel management** -- Extract, select, and check host kernels automatically
+- **Resource cleanup** -- Automatic garbage collection of leaked TAP devices and iptables rules from crashed VMs
 - **Resource control** -- Configure vCPUs, memory, environment variables per VM
 - **Short ID resolution** -- Reference VMs by name, full ID, or unique ID prefix (e.g., `chvm stop a1b`)
 - **Tab completion** -- Dynamic shell completions for commands, flags, and VM names/IDs
@@ -50,6 +51,9 @@ make install
 ```bash
 # Check what's needed
 chvm doctor
+
+# Clean up leaked resources from crashed VMs
+sudo chvm doctor --gc
 
 # Setup kernel and network bridge
 sudo chvm setup

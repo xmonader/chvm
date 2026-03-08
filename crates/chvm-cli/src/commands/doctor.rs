@@ -9,6 +9,8 @@ use chvm_lib::paths::Paths;
 use chvm_lib::vm::state::VmState;
 use chvm_lib::vm::VmManager;
 
+const ID_PREFIX_LEN: usize = 8;
+
 pub async fn execute(args: &DoctorArgs) -> anyhow::Result<()> {
     println!("CHVM Doctor - System Check\n");
 
@@ -156,7 +158,7 @@ async fn gc_cleanup() -> anyhow::Result<()> {
         .map(|s| s.id.clone())
         .collect();
 
-    let cleaned = running_before.len() - running_after.len();
+    let cleaned = running_before.len().saturating_sub(running_after.len());
     if cleaned > 0 {
         println!("Cleaned up {} crashed VM(s)", cleaned);
     } else {
@@ -166,7 +168,7 @@ async fn gc_cleanup() -> anyhow::Result<()> {
     // Level 2: Detect orphaned TAP devices and iptables rules
     let running_prefixes: HashSet<String> = running_after
         .iter()
-        .map(|id| id[..std::cmp::min(8, id.len())].to_string())
+        .map(|id| id[..std::cmp::min(ID_PREFIX_LEN, id.len())].to_string())
         .collect();
 
     // Collect IPs of running VMs for iptables orphan detection
@@ -271,7 +273,15 @@ fn gc_orphaned_iptables_rules(running_ips: &HashSet<String>) {
 
         match Command::new("iptables").args(&cmd_args).output() {
             Ok(out) if out.status.success() => removed += 1,
-            _ => {}
+            Ok(out) => {
+                eprintln!(
+                    "Warning: Failed to remove iptables rule: {}",
+                    String::from_utf8_lossy(&out.stderr).trim()
+                );
+            }
+            Err(e) => {
+                eprintln!("Warning: Failed to run iptables: {e}");
+            }
         }
     }
 
@@ -306,4 +316,51 @@ fn extract_chvm_ip(line: &str) -> Option<String> {
         }
     }
     None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_extract_chvm_ip_prerouting_dnat() {
+        let line = "-A PREROUTING -p tcp --dport 8080 -j DNAT --to-destination 192.168.200.2:80";
+        assert_eq!(extract_chvm_ip(line), Some("192.168.200.2".to_string()));
+    }
+
+    #[test]
+    fn test_extract_chvm_ip_output_dnat() {
+        let line =
+            "-A OUTPUT -p tcp -d 127.0.0.1 --dport 8080 -j DNAT --to-destination 192.168.200.5:80";
+        assert_eq!(extract_chvm_ip(line), Some("192.168.200.5".to_string()));
+    }
+
+    #[test]
+    fn test_extract_chvm_ip_postrouting_masquerade() {
+        let line = "-A POSTROUTING -p tcp -d 192.168.200.3 --dport 80 -j MASQUERADE";
+        assert_eq!(extract_chvm_ip(line), Some("192.168.200.3".to_string()));
+    }
+
+    #[test]
+    fn test_extract_chvm_ip_no_match() {
+        let line = "-A PREROUTING -p tcp --dport 8080 -j DNAT --to-destination 10.0.0.1:80";
+        assert_eq!(extract_chvm_ip(line), None);
+    }
+
+    #[test]
+    fn test_extract_chvm_ip_empty_line() {
+        assert_eq!(extract_chvm_ip(""), None);
+    }
+
+    #[test]
+    fn test_extract_chvm_ip_subnet_rule_uses_d_flag() {
+        let line = "-A FORWARD -d 192.168.200.10 -j ACCEPT";
+        assert_eq!(extract_chvm_ip(line), Some("192.168.200.10".to_string()));
+    }
+
+    #[test]
+    fn test_extract_chvm_ip_no_port_in_destination() {
+        let line = "-A PREROUTING -p udp --dport 53 -j DNAT --to-destination 192.168.200.7";
+        assert_eq!(extract_chvm_ip(line), Some("192.168.200.7".to_string()));
+    }
 }
