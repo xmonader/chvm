@@ -115,16 +115,13 @@ fn main() {
     let child = cmd.spawn();
 
     match child {
-        Ok(mut child) => {
-            // Setup zombie reaping (and mycelium supervision) in background.
-            std::thread::spawn(move || signal::reap_zombies(mycelium_state));
+        Ok(child) => {
+            let child_pid = child.id() as i32;
 
-            let status = child.wait().unwrap_or_else(|e| {
-                eprintln!("[init] Failed to wait for process: {e}");
-                std::process::exit(1);
-            });
+            let (tx, rx) = std::sync::mpsc::channel();
+            std::thread::spawn(move || signal::reap_zombies(child_pid, tx, mycelium_state));
 
-            let exit_code = status.code().unwrap_or(1);
+            let exit_code = rx.recv().unwrap_or(1);
             println!("[init] Main process exited with code {exit_code}");
             signal::poweroff(exit_code);
         }

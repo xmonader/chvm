@@ -1,3 +1,5 @@
+use std::sync::mpsc;
+
 use nix::sys::wait::{waitpid, WaitPidFlag, WaitStatus};
 use nix::unistd::Pid;
 
@@ -21,10 +23,11 @@ pub fn block_sigchld() {
 }
 
 /// Reap zombie child processes using SIGCHLD.
-/// Blocks on sigwait for SIGCHLD, then reaps all available children.
-/// If a mycelium config is provided, automatically restarts mycelium when
-/// its process is reaped.
-pub fn reap_zombies(mycelium: Option<(i32, std::process::Child, MyceliumConfig)>) {
+pub fn reap_zombies(
+    main_pid: i32,
+    main_exit_tx: mpsc::Sender<i32>,
+    mycelium: Option<(i32, std::process::Child, MyceliumConfig)>,
+) {
     let (mut mycelium_pid, mut mycelium_child, mycelium_config) = match mycelium {
         Some((pid, child, config)) => (Some(pid), Some(child), Some(config)),
         None => (None, None, None),
@@ -58,21 +61,25 @@ pub fn reap_zombies(mycelium: Option<(i32, std::process::Child, MyceliumConfig)>
         }
 
         // Reap all available children (there may be multiple)
-        while let Ok(WaitStatus::Exited(pid, _)) | Ok(WaitStatus::Signaled(pid, _, _)) =
-            waitpid(Pid::from_raw(-1), Some(WaitPidFlag::WNOHANG))
-        {
-            let raw_pid = pid.as_raw();
+        loop {
+            let (raw_pid, exit_code) = match waitpid(Pid::from_raw(-1), Some(WaitPidFlag::WNOHANG))
+            {
+                Ok(WaitStatus::Exited(pid, code)) => (pid.as_raw(), code),
+                Ok(WaitStatus::Signaled(pid, sig, _)) => (pid.as_raw(), 128 + sig as i32),
+                _ => break,
+            };
 
-            if mycelium_pid == Some(raw_pid) {
+            if raw_pid == main_pid {
+                let _ = main_exit_tx.send(exit_code);
+            } else if mycelium_pid == Some(raw_pid) {
                 eprintln!("[init] Mycelium (PID {raw_pid}) exited, scheduling restart...");
-                // Wait on the Child handle to clean up Rust-side resources
                 if let Some(mut child) = mycelium_child.take() {
                     let _ = child.wait();
                 }
                 mycelium_pid = None;
                 restart_after = Some(std::time::Instant::now() + MYCELIUM_RESTART_DELAY);
             } else {
-                println!("[init] Reaped child process {pid}");
+                println!("[init] Reaped child process {raw_pid} (exit code {exit_code})");
             }
         }
 
