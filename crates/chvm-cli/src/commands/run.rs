@@ -19,7 +19,7 @@ pub async fn execute(manager: &mut VmManager, args: &RunArgs) -> anyhow::Result<
         loop {
             tokio::time::sleep(std::time::Duration::from_secs(1)).await;
             // Re-check process liveness before reading status
-            if let Err(e) = manager.refresh_status() {
+            if let Err(e) = manager.refresh_status().await {
                 eprintln!("Warning: Failed to refresh VM status: {e}");
             }
             match manager.get(&state.id) {

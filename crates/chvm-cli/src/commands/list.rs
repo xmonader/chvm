@@ -3,8 +3,8 @@ use crate::commands::truncate;
 use chvm_lib::vm::state::VmState;
 use chvm_lib::vm::VmManager;
 
-pub fn execute(manager: &mut VmManager, args: &ListArgs) -> anyhow::Result<()> {
-    if let Err(e) = manager.refresh_status() {
+pub async fn execute(manager: &mut VmManager, args: &ListArgs) -> anyhow::Result<()> {
+    if let Err(e) = manager.refresh_status().await {
         eprintln!("Warning: Failed to refresh VM status: {e}");
     }
     let vms = manager.list();

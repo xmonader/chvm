@@ -304,10 +304,10 @@ chvm prune
 
 ### chvm doctor
 
-Check system requirements.
+Check system requirements and optionally clean up leaked resources.
 
 ```
-chvm doctor
+chvm doctor [--gc]
 ```
 
 Checks for:
@@ -320,6 +320,20 @@ Checks for:
 - ip (iproute2)
 - /dev/kvm access
 - Data directory
+
+**Garbage collection (`--gc`):**
+
+When passed `--gc`, doctor also cleans up leaked host resources left behind by crashed or killed VM processes:
+
+- Detects VMs marked as Running whose process has died, tears down their network interfaces and storage, and marks them as Stopped
+- Removes orphaned TAP devices (`tap-*`) not belonging to any running VM
+- Removes orphaned iptables NAT rules referencing the chvm subnet (`192.168.200.0/24`) not belonging to any running VM
+
+```bash
+sudo chvm doctor --gc
+```
+
+> **Note:** The `--gc` flag requires root privileges since it modifies network interfaces and iptables rules.
 
 ---
 

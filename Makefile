@@ -1,6 +1,6 @@
 MUSL_TARGET := x86_64-unknown-linux-musl
 
-.PHONY: build build-debug release test unit-test integration-test check fmt fmt-check clippy clean install doctor prune \
+.PHONY: build build-debug release test unit-test integration-test check fmt fmt-check clippy clean install install-global doctor prune \
        docker-build docker-build-alpine docker-build-ubuntu docker-build-nginx docker-build-redis docker-build-ssh
 
 # Default target
@@ -53,6 +53,11 @@ install: build
 	mkdir -p ~/.local/share/bash-completion/completions
 	COMPLETE=bash ~/.cargo/bin/chvm > ~/.local/share/bash-completion/completions/chvm
 	cp scripts/doas-completion.bash ~/.local/share/bash-completion/completions/doas
+
+# Install chvm globally to /usr/local/bin
+install-global: build
+	doas cp target/$(MUSL_TARGET)/release/chvm /usr/local/bin/chvm
+	doas cp target/$(MUSL_TARGET)/release/chvm-init /usr/local/bin/chvm-init
 
 # Run chvm doctor
 doctor: build

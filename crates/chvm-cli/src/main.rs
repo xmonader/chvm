@@ -35,7 +35,7 @@ async fn main() -> anyhow::Result<()> {
     // Handle commands that don't need a full manager
     match &cli.command {
         Commands::Version(args) => return commands::version::execute(args),
-        Commands::Doctor(args) => return commands::doctor::execute(args),
+        Commands::Doctor(args) => return commands::doctor::execute(args).await,
         Commands::Setup(args) => return commands::setup::execute(args),
         Commands::Kernel(args) => return commands::kernel::execute(args),
         Commands::Login(args) => return commands::login::execute(args),
@@ -59,7 +59,7 @@ async fn main() -> anyhow::Result<()> {
         Commands::Rm(args) => commands::rm::execute(&mut manager, args).await,
         Commands::Exec(args) => commands::exec::execute(&manager, args).await,
         Commands::Attach(args) => commands::attach::execute(&manager, args).await,
-        Commands::List(args) => commands::list::execute(&mut manager, args),
+        Commands::List(args) => commands::list::execute(&mut manager, args).await,
         Commands::Logs(args) => commands::logs::execute(&mut manager, args),
         Commands::Inspect(args) => commands::inspect::execute(&mut manager, args),
         Commands::Images(args) => commands::images::execute(&manager, args),

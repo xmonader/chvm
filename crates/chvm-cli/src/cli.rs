@@ -307,7 +307,11 @@ pub struct ImagesArgs {}
 pub struct PruneArgs {}
 
 #[derive(clap::Args)]
-pub struct DoctorArgs {}
+pub struct DoctorArgs {
+    /// Clean up leaked TAP devices, iptables rules, and dead VM resources
+    #[arg(long)]
+    pub gc: bool,
+}
 
 #[derive(clap::Args)]
 pub struct SetupArgs {
