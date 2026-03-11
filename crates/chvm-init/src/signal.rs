@@ -73,9 +73,7 @@ pub fn reap_zombies(
                 let _ = main_exit_tx.send(exit_code);
             } else if mycelium_pid == Some(raw_pid) {
                 eprintln!("[init] Mycelium (PID {raw_pid}) exited, scheduling restart...");
-                if let Some(mut child) = mycelium_child.take() {
-                    let _ = child.wait();
-                }
+                mycelium_child.take();
                 mycelium_pid = None;
                 restart_after = Some(std::time::Instant::now() + MYCELIUM_RESTART_DELAY);
             } else {
