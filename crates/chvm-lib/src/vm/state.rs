@@ -49,6 +49,24 @@ impl std::fmt::Display for NetworkMode {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum MyceliumHealth {
+    Healthy,
+    Unhealthy,
+    Unknown,
+}
+
+impl std::fmt::Display for MyceliumHealth {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            MyceliumHealth::Healthy => write!(f, "healthy"),
+            MyceliumHealth::Unhealthy => write!(f, "unhealthy"),
+            MyceliumHealth::Unknown => write!(f, "unknown"),
+        }
+    }
+}
+
 impl std::str::FromStr for NetworkMode {
     type Err = String;
     fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
@@ -559,6 +577,8 @@ pub struct NetworkState {
     pub mycelium_peers: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mycelium_ip: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mycelium_health: Option<MyceliumHealth>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
