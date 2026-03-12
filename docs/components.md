@@ -282,7 +282,7 @@ For each `-p HOST:GUEST` mapping, three iptables rules are created:
 
 Extends TAP networking by passing mycelium peer addresses to the guest via kernel cmdline (`chvm.mycelium_peer=`). During storage preparation, when the network mode is `mycelium`, the `mycelium` binary is injected into the guest rootfs at `/usr/bin/mycelium`. The guest init starts the mycelium daemon, which creates a TUN interface with a globally-unique IPv6 address.
 
-After the VM boots, the manager probes the guest (via vsock exec) to discover the mycelium IPv6 address and stores it in `network_state.mycelium_ip`, making it visible in `chvm inspect` output.
+After the VM boots, the manager probes the guest (via vsock exec) to discover the mycelium IPv6 address and stores it in `network_state.mycelium_ip`, making it visible in `chvm inspect` output. A live health check can be triggered with `chvm inspect --check-mycelium-health`, which probes the guest to verify the mycelium process is running and updates `network_state.mycelium_health`.
 
 Binary search order for mycelium: `./bin/mycelium`, `/usr/local/bin/mycelium`, `/usr/bin/mycelium`, `~/.chvm/bin/mycelium`.
 

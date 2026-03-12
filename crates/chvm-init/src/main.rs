@@ -52,10 +52,19 @@ fn main() {
         eprintln!("[init] Warning: Failed to mount volumes: {e}");
     }
 
-    // Setup mycelium if configured
-    if let Err(e) = mycelium::setup_mycelium() {
-        eprintln!("[init] Warning: Failed to setup mycelium: {e}");
-    }
+    signal::block_sigchld();
+
+    // Setup and spawn mycelium if configured
+    let mycelium_state = match mycelium::setup_mycelium() {
+        Ok(Some(config)) => {
+            mycelium::spawn_mycelium(&config).map(|(pid, child)| (pid, child, config))
+        }
+        Ok(None) => None,
+        Err(e) => {
+            eprintln!("[init] Warning: Failed to setup mycelium: {e}");
+            None
+        }
+    };
 
     // Load configuration from kernel cmdline
     let config = cmdline_parser::load_config();
@@ -106,16 +115,13 @@ fn main() {
     let child = cmd.spawn();
 
     match child {
-        Ok(mut child) => {
-            // Setup zombie reaping in background
-            std::thread::spawn(signal::reap_zombies);
+        Ok(child) => {
+            let child_pid = child.id() as i32;
 
-            let status = child.wait().unwrap_or_else(|e| {
-                eprintln!("[init] Failed to wait for process: {e}");
-                std::process::exit(1);
-            });
+            let (tx, rx) = std::sync::mpsc::channel();
+            std::thread::spawn(move || signal::reap_zombies(child_pid, tx, mycelium_state));
 
-            let exit_code = status.code().unwrap_or(1);
+            let exit_code = rx.recv().unwrap_or(1);
             println!("[init] Main process exited with code {exit_code}");
             signal::poweroff(exit_code);
         }

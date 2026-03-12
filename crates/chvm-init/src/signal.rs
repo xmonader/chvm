@@ -1,24 +1,114 @@
+use std::sync::mpsc;
+
 use nix::sys::wait::{waitpid, WaitPidFlag, WaitStatus};
 use nix::unistd::Pid;
 
-/// Reap zombie child processes using SIGCHLD.
-/// Blocks on sigwait for SIGCHLD, then reaps all available children.
-pub fn reap_zombies() {
-    // Block SIGCHLD so we can wait for it with sigwait
+use crate::mycelium::MyceliumConfig;
+
+const MYCELIUM_RESTART_DELAY: std::time::Duration = std::time::Duration::from_secs(2);
+const MYCELIUM_SPAWN_RETRY_DELAY: std::time::Duration = std::time::Duration::from_secs(2);
+const MYCELIUM_SPAWN_RETRIES: u32 = 5;
+
+/// Block SIGCHLD on the calling thread. Must be called on the main thread
+/// before spawning any children so that SIGCHLD is inherited as blocked by
+/// all threads, ensuring the reaper thread can reliably catch it via sigtimedwait.
+pub fn block_sigchld() {
     let mut mask = nix::sys::signal::SigSet::empty();
     mask.add(nix::sys::signal::Signal::SIGCHLD);
-    let _ =
-        nix::sys::signal::sigprocmask(nix::sys::signal::SigmaskHow::SIG_BLOCK, Some(&mask), None);
+    if let Err(e) =
+        nix::sys::signal::sigprocmask(nix::sys::signal::SigmaskHow::SIG_BLOCK, Some(&mask), None)
+    {
+        eprintln!("[init] Warning: failed to block SIGCHLD: {e}");
+    }
+}
+
+/// Reap zombie child processes using SIGCHLD.
+pub fn reap_zombies(
+    main_pid: i32,
+    main_exit_tx: mpsc::Sender<i32>,
+    mycelium: Option<(i32, std::process::Child, MyceliumConfig)>,
+) {
+    let (mut mycelium_pid, mut mycelium_child, mycelium_config) = match mycelium {
+        Some((pid, child, config)) => (Some(pid), Some(child), Some(config)),
+        None => (None, None, None),
+    };
+
+    // Pending restart: set when mycelium dies, cleared after respawn
+    let mut restart_after: Option<std::time::Instant> = None;
+    let mut spawn_attempts: u32 = 0;
+
+    let mut mask = nix::sys::signal::SigSet::empty();
+    mask.add(nix::sys::signal::Signal::SIGCHLD);
 
     loop {
-        // Wait for SIGCHLD signal
-        let _ = mask.wait();
+        // Use sigtimedwait so we can wake up to handle pending restarts
+        let timeout = if restart_after.is_some() {
+            // Check every 500ms for restart deadline
+            libc::timespec {
+                tv_sec: 0,
+                tv_nsec: 500_000_000,
+            }
+        } else {
+            // No pending restart — block indefinitely (large timeout)
+            libc::timespec {
+                tv_sec: 3600,
+                tv_nsec: 0,
+            }
+        };
+
+        unsafe {
+            libc::sigtimedwait(mask.as_ref(), std::ptr::null_mut(), &timeout);
+        }
 
         // Reap all available children (there may be multiple)
-        while let Ok(WaitStatus::Exited(pid, _)) | Ok(WaitStatus::Signaled(pid, _, _)) =
-            waitpid(Pid::from_raw(-1), Some(WaitPidFlag::WNOHANG))
-        {
-            println!("[init] Reaped child process {pid}");
+        loop {
+            let (raw_pid, exit_code) = match waitpid(Pid::from_raw(-1), Some(WaitPidFlag::WNOHANG))
+            {
+                Ok(WaitStatus::Exited(pid, code)) => (pid.as_raw(), code),
+                Ok(WaitStatus::Signaled(pid, sig, _)) => (pid.as_raw(), 128 + sig as i32),
+                _ => break,
+            };
+
+            if raw_pid == main_pid {
+                let _ = main_exit_tx.send(exit_code);
+            } else if mycelium_pid == Some(raw_pid) {
+                eprintln!("[init] Mycelium (PID {raw_pid}) exited, scheduling restart...");
+                mycelium_child.take();
+                mycelium_pid = None;
+                restart_after = Some(std::time::Instant::now() + MYCELIUM_RESTART_DELAY);
+            } else {
+                println!("[init] Reaped child process {raw_pid} (exit code {exit_code})");
+            }
+        }
+
+        // Handle pending mycelium restart without blocking the reap loop
+        let ready = restart_after.is_some_and(|d| std::time::Instant::now() >= d);
+        if !ready {
+            continue;
+        }
+
+        let Some(ref config) = mycelium_config else {
+            restart_after = None;
+            continue;
+        };
+
+        spawn_attempts += 1;
+        if let Some((pid, child)) = crate::mycelium::spawn_mycelium(config) {
+            mycelium_pid = Some(pid);
+            mycelium_child = Some(child);
+            restart_after = None;
+            spawn_attempts = 0;
+        } else if spawn_attempts < MYCELIUM_SPAWN_RETRIES {
+            eprintln!(
+                "[init] Mycelium spawn attempt {spawn_attempts}/{MYCELIUM_SPAWN_RETRIES} failed, retrying..."
+            );
+            restart_after = Some(std::time::Instant::now() + MYCELIUM_SPAWN_RETRY_DELAY);
+        } else {
+            eprintln!(
+                "[init] Mycelium spawn failed after {MYCELIUM_SPAWN_RETRIES} attempts, giving up"
+            );
+            restart_after = None;
+            spawn_attempts = 0;
         }
     }
 }

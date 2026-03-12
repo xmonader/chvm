@@ -298,6 +298,10 @@ pub struct InspectArgs {
     /// Container ID or name
     #[arg(add = ArgValueCompleter::new(complete_vm))]
     pub container: String,
+
+    /// Run mycelium health check before displaying state
+    #[arg(long)]
+    pub check_mycelium_health: bool,
 }
 
 #[derive(clap::Args)]

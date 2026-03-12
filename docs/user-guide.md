@@ -265,10 +265,12 @@ Shows the serial console log from the guest kernel and init process.
 Show detailed VM information as JSON.
 
 ```
-chvm inspect <CONTAINER>
+chvm inspect <CONTAINER> [--check-mycelium-health]
 ```
 
 Returns the full `RuntimeState` including VM config, network state, storage state, timestamps, and process IDs. For VMs using mycelium networking, the `network_state.mycelium_ip` field contains the VM's globally-unique IPv6 address.
+
+Use `--check-mycelium-health` to probe the guest and update the `mycelium_health` status before displaying. Without this flag, inspect returns instantly using the last known state.
 
 ```bash
 # Show full state
@@ -276,6 +278,9 @@ chvm inspect myvm
 
 # Extract just the mycelium IP
 chvm inspect myvm | jq '.network_state.mycelium_ip'
+
+# Include a live mycelium health check
+chvm inspect myvm --check-mycelium-health
 ```
 
 ---
@@ -456,6 +461,13 @@ The VM's mycelium IPv6 address is automatically probed after boot and stored in 
 ```bash
 chvm inspect myc1 | jq '.network_state.mycelium_ip'
 # "5d7:bb4e:d6e5:1e5a:2056:279a:5190:1c62"
+```
+
+To also check the live health status of the mycelium process:
+
+```bash
+chvm inspect myc1 --check-mycelium-health | jq '.network_state.mycelium_health'
+# "healthy"
 ```
 
 You can also query it from inside the guest:
