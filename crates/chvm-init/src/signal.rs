@@ -6,6 +6,9 @@ use nix::sys::wait::{waitpid, WaitPidFlag, WaitStatus};
 use nix::unistd::Pid;
 
 static SHUTDOWN_IN_PROGRESS: AtomicBool = AtomicBool::new(false);
+const POLL_INTERVAL: Duration = Duration::from_millis(50);
+const SIGTERM_TIMEOUT: Duration = Duration::from_secs(3);
+const SIGKILL_TIMEOUT: Duration = Duration::from_secs(1);
 
 /// Reap zombie child processes using SIGCHLD.
 /// Blocks on sigwait for SIGCHLD, then reaps all available children.
@@ -29,8 +32,8 @@ pub fn reap_zombies() {
     }
 }
 
-/// Non-blocking reap of all zombie children.
-fn reap_all_children() {
+/// Non-blocking reap of all zombie children. Returns true if no children remain.
+fn reap_all_children() -> bool {
     loop {
         match waitpid(Pid::from_raw(-1), Some(WaitPidFlag::WNOHANG)) {
             Ok(WaitStatus::Exited(pid, code)) => {
@@ -39,15 +42,23 @@ fn reap_all_children() {
             Ok(WaitStatus::Signaled(pid, sig, _)) => {
                 println!("[init] Reaped child process {pid} (killed by {sig})");
             }
-            Ok(WaitStatus::StillAlive) | Err(_) => break,
+            Ok(WaitStatus::StillAlive) => return false,
+            Err(_) => return true,
             _ => continue,
         }
     }
 }
 
-/// Returns true if no children remain.
-fn no_children_left() -> bool {
-    waitpid(Pid::from_raw(-1), Some(WaitPidFlag::WNOHANG)).is_err()
+/// Poll until all children are reaped or timeout expires. Returns true if none remain.
+fn wait_for_children(timeout: Duration) -> bool {
+    let deadline = Instant::now() + timeout;
+    while Instant::now() < deadline {
+        if reap_all_children() {
+            return true;
+        }
+        std::thread::sleep(POLL_INTERVAL);
+    }
+    false
 }
 
 /// Send SIGTERM to all children, wait up to 3s, then SIGKILL stragglers.
@@ -55,26 +66,14 @@ fn terminate_all_children() {
     println!("[init] Sending SIGTERM to all child processes...");
     let _ = nix::sys::signal::kill(Pid::from_raw(-1), Signal::SIGTERM);
 
-    let deadline = Instant::now() + Duration::from_secs(3);
-    while Instant::now() < deadline {
-        reap_all_children();
-        if no_children_left() {
-            return;
-        }
-        std::thread::sleep(Duration::from_millis(50));
+    if wait_for_children(SIGTERM_TIMEOUT) {
+        return;
     }
 
     println!("[init] Sending SIGKILL to remaining child processes...");
     let _ = nix::sys::signal::kill(Pid::from_raw(-1), Signal::SIGKILL);
 
-    let deadline = Instant::now() + Duration::from_secs(1);
-    while Instant::now() < deadline {
-        reap_all_children();
-        if no_children_left() {
-            return;
-        }
-        std::thread::sleep(Duration::from_millis(50));
-    }
+    wait_for_children(SIGKILL_TIMEOUT);
 }
 
 /// Power off the VM.
