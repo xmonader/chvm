@@ -166,50 +166,6 @@ fn terminate_all_children() {
     wait_for_children(SIGKILL_TIMEOUT);
 }
 
-/// Non-blocking reap of all zombie children. Returns true if no children remain.
-fn reap_all_children() -> bool {
-    loop {
-        match waitpid(Pid::from_raw(-1), Some(WaitPidFlag::WNOHANG)) {
-            Ok(WaitStatus::Exited(pid, code)) => {
-                println!("[init] Reaped child process {pid} (exited {code})");
-            }
-            Ok(WaitStatus::Signaled(pid, sig, _)) => {
-                println!("[init] Reaped child process {pid} (killed by {sig})");
-            }
-            Ok(WaitStatus::StillAlive) => return false,
-            Err(_) => return true,
-            _ => continue,
-        }
-    }
-}
-
-/// Poll until all children are reaped or timeout expires. Returns true if none remain.
-fn wait_for_children(timeout: Duration) -> bool {
-    let deadline = Instant::now() + timeout;
-    while Instant::now() < deadline {
-        if reap_all_children() {
-            return true;
-        }
-        std::thread::sleep(POLL_INTERVAL);
-    }
-    false
-}
-
-/// Send SIGTERM to all children, wait up to 3s, then SIGKILL stragglers.
-fn terminate_all_children() {
-    println!("[init] Sending SIGTERM to all child processes...");
-    let _ = nix::sys::signal::kill(Pid::from_raw(-1), Signal::SIGTERM);
-
-    if wait_for_children(SIGTERM_TIMEOUT) {
-        return;
-    }
-
-    println!("[init] Sending SIGKILL to remaining child processes...");
-    let _ = nix::sys::signal::kill(Pid::from_raw(-1), Signal::SIGKILL);
-
-    wait_for_children(SIGKILL_TIMEOUT);
-}
-
 /// Power off the VM.
 pub fn poweroff(exit_code: i32) -> ! {
     // Prevent multiple concurrent shutdowns
