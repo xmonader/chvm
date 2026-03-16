@@ -1,5 +1,12 @@
 MUSL_TARGET := x86_64-unknown-linux-musl
 
+# Detect if we need sudo/doas
+SUDO ?= $(shell if [ "$$(id -u)" -ne 0 ]; then \
+            if command -v doas >/dev/null 2>&1; then echo "doas"; \
+            elif command -v sudo >/dev/null 2>&1; then echo "sudo"; \
+            fi; \
+        fi)
+
 .PHONY: build build-debug release test unit-test integration-test check fmt fmt-check clippy clean install install-global doctor prune \
        docker-build docker-build-alpine docker-build-ubuntu docker-build-nginx docker-build-redis docker-build-ssh
 
@@ -23,7 +30,7 @@ unit-test:
 
 # Run integration tests (requires root)
 integration-test:
-	doas bash tests/run_tests.sh
+	$(SUDO) bash tests/run_tests.sh
 
 # Run all tests: unit + integration
 test: unit-test integration-test
@@ -48,16 +55,16 @@ clippy:
 install: build
 	mkdir -p ~/.cargo/bin
 	cp target/$(MUSL_TARGET)/release/chvm ~/.cargo/bin/chvm
-	doas mkdir -p ~/.chvm/bin
-	doas cp target/$(MUSL_TARGET)/release/chvm-init ~/.chvm/bin/chvm-init
+	$(SUDO) mkdir -p ~/.chvm/bin
+	$(SUDO) cp target/$(MUSL_TARGET)/release/chvm-init ~/.chvm/bin/chvm-init
 	mkdir -p ~/.local/share/bash-completion/completions
 	COMPLETE=bash ~/.cargo/bin/chvm > ~/.local/share/bash-completion/completions/chvm
 	cp scripts/doas-completion.bash ~/.local/share/bash-completion/completions/doas
 
 # Install chvm globally to /usr/local/bin
 install-global: build
-	doas cp target/$(MUSL_TARGET)/release/chvm /usr/local/bin/chvm
-	doas cp target/$(MUSL_TARGET)/release/chvm-init /usr/local/bin/chvm-init
+	$(SUDO) cp target/$(MUSL_TARGET)/release/chvm /usr/local/bin/chvm
+	$(SUDO) cp target/$(MUSL_TARGET)/release/chvm-init /usr/local/bin/chvm-init
 
 # Run chvm doctor
 doctor: build
@@ -65,7 +72,7 @@ doctor: build
 
 # Prune stopped VMs and clean stale resources
 prune: build
-	doas ./target/$(MUSL_TARGET)/release/chvm prune
+	$(SUDO) ./target/$(MUSL_TARGET)/release/chvm prune
 
 # Clean build artifacts
 clean:
