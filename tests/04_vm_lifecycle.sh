@@ -79,7 +79,21 @@ else
     pass "run --rm auto-cleans VM after exit"
 fi
 
-# 8. Stop already-stopped VM → error
+# 8. Stop → Start (restart cycle)
+$CHVM run -d --name "${TEST_PREFIX}-restart" alpine:latest sleep 3600 >/dev/null 2>&1
+wait_vm_running "${TEST_PREFIX}-restart" 30 || true
+$CHVM stop "${TEST_PREFIX}-restart" >/dev/null 2>&1
+wait_vm_stopped "${TEST_PREFIX}-restart" 30 || true
+
+$CHVM start "${TEST_PREFIX}-restart" >/dev/null 2>&1
+if wait_vm_running "${TEST_PREFIX}-restart" 30; then
+    pass "chvm start after stop restarts VM"
+else
+    fail "chvm start after stop restarts VM" "Timeout waiting for Running state"
+fi
+cleanup_vm "${TEST_PREFIX}-restart"
+
+# 9. Stop already-stopped VM → error
 $CHVM run -d --name "${TEST_PREFIX}-stopped" alpine:latest sleep 3600 >/dev/null 2>&1
 wait_vm_running "${TEST_PREFIX}-stopped" 30 || true
 $CHVM stop "${TEST_PREFIX}-stopped" >/dev/null 2>&1
@@ -89,12 +103,12 @@ assert_failure \
     "$CHVM stop ${TEST_PREFIX}-stopped"
 cleanup_vm "${TEST_PREFIX}-stopped"
 
-# 9. Remove non-existent VM → error
+# 10. Remove non-existent VM → error
 assert_failure \
     "Remove non-existent VM errors" \
     "$CHVM rm nonexistent_vm_${TEST_PREFIX}"
 
-# 10. Prune removes stopped VMs
+# 11. Prune removes stopped VMs
 $CHVM run -d --name "${TEST_PREFIX}-prune1" alpine:latest sleep 3600 >/dev/null 2>&1
 $CHVM run -d --name "${TEST_PREFIX}-prune2" alpine:latest sleep 3600 >/dev/null 2>&1
 wait_vm_running "${TEST_PREFIX}-prune1" 30 || true

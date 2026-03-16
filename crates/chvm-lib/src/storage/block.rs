@@ -14,11 +14,13 @@ impl StorageBackend for BlockStorage {
     async fn prepare(&self, config: &PrepareConfig) -> anyhow::Result<StorageResult> {
         let block_path = config.state_dir.join("rootfs.img");
 
-        super::image::create_ext4_image(
-            &block_path,
-            Path::new(&config.rootfs_path),
-            config.inject_mycelium,
-        )?;
+        if !block_path.exists() {
+            super::image::create_ext4_image(
+                &block_path,
+                Path::new(&config.rootfs_path),
+                config.inject_mycelium,
+            )?;
+        }
 
         Ok(StorageResult {
             block_device: Some(block_path.to_string_lossy().to_string()),

@@ -411,6 +411,10 @@ impl VmManager {
             }
         }
 
+        // Remove stale API socket so a subsequent start doesn't get EADDRINUSE
+        let vm_dir = self.paths.vm_dir(&state.id);
+        let _ = std::fs::remove_file(vm_dir.join("api.sock"));
+
         // Cleanup storage (virtiofsd processes, overlays)
         self.cleanup_storage(&state);
 
