@@ -76,6 +76,13 @@ pub async fn vm_info(socket_path: &str) -> Result<serde_json::Value> {
     Ok(info)
 }
 
+/// Get VM counters (network and block device statistics).
+pub async fn vm_counters(socket_path: &str) -> Result<serde_json::Value> {
+    let body = api_request(socket_path, "GET", "/api/v1/vm.counters", None).await?;
+    let counters: serde_json::Value = serde_json::from_slice(&body)?;
+    Ok(counters)
+}
+
 /// Gracefully shutdown the VM.
 pub async fn shutdown(socket_path: &str) -> Result<()> {
     api_request(socket_path, "PUT", "/api/v1/vm.shutdown", None).await?;

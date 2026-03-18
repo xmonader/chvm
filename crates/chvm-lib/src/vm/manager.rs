@@ -510,6 +510,22 @@ impl VmManager {
         crate::vsock::proxy::interactive_session(&vsock_path).await
     }
 
+    /// Retrieve runtime counters (network, block, etc.) for a running VM.
+    pub async fn stats(&self, id_or_name: &str) -> Result<(RuntimeState, serde_json::Value)> {
+        let state = self.state_store.resolve(id_or_name)?;
+        if state.status != VmState::Running {
+            return Err(ChvmError::VmNotRunning);
+        }
+
+        let socket_path = state
+            .vm_config
+            .api_socket_path()
+            .ok_or_else(|| ChvmError::ApiError("no state dir for API socket".into()))?;
+
+        let counters = crate::hypervisor::api::vm_counters(&socket_path).await?;
+        Ok((state.clone(), counters))
+    }
+
     /// Refresh VM statuses by checking process liveness.
     /// When a VM's process is found dead, cleans up network and storage resources
     /// before marking it as stopped.

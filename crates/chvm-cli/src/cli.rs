@@ -90,6 +90,9 @@ pub enum Commands {
     /// Show detailed container information
     Inspect(InspectArgs),
 
+    /// Show resource usage statistics for a container
+    Stats(StatsArgs),
+
     /// List images
     Images(ImagesArgs),
 
@@ -302,6 +305,17 @@ pub struct InspectArgs {
     /// Run mycelium health check before displaying state
     #[arg(long)]
     pub check_mycelium_health: bool,
+}
+
+#[derive(clap::Args)]
+pub struct StatsArgs {
+    /// Container ID or name
+    #[arg(add = ArgValueCompleter::new(complete_vm))]
+    pub container: String,
+
+    /// Output in JSON format
+    #[arg(long)]
+    pub json: bool,
 }
 
 #[derive(clap::Args)]

@@ -15,6 +15,7 @@ pub mod rm;
 pub mod run;
 pub mod setup;
 pub mod start;
+pub mod stats;
 pub mod stop;
 pub mod version;
 
