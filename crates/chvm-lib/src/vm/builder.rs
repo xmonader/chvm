@@ -357,7 +357,7 @@ mod tests {
         assert_eq!(vm_config.name, "test-vm");
         assert_eq!(vm_config.vcpu, 1);
         assert_eq!(vm_config.memory_mb, 512);
-        assert_eq!(vm_config.network.mode, NetworkMode::Tap);
+        assert_eq!(vm_config.network.mode, NetworkMode::Mycelium);
     }
 
     #[test]

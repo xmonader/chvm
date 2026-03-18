@@ -140,7 +140,7 @@ pub struct RunArgs {
     pub storage: String,
 
     /// Network mode (tap, mycelium, none)
-    #[arg(long, default_value = "tap")]
+    #[arg(long, default_value = "mycelium")]
     pub network: String,
 
     /// Publish ports (HOST:GUEST)
@@ -197,7 +197,7 @@ pub struct CreateArgs {
     #[arg(long, default_value = "block")]
     pub storage: String,
 
-    #[arg(long, default_value = "tap")]
+    #[arg(long, default_value = "mycelium")]
     pub network: String,
 
     #[arg(short, long)]

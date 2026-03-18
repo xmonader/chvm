@@ -31,6 +31,9 @@ pub struct Config {
 
     #[serde(default = "default_bridge")]
     pub default_bridge: String,
+
+    #[serde(default = "default_mycelium_peers")]
+    pub default_mycelium_peers: Vec<String>,
 }
 
 fn default_base_dir() -> PathBuf {
@@ -43,13 +46,19 @@ fn default_memory_mb() -> u32 {
     512
 }
 fn default_network_mode() -> String {
-    "tap".into()
+    "mycelium".into()
 }
 fn default_storage_backend() -> String {
     "block".into()
 }
 fn default_bridge() -> String {
     "chvm0".into()
+}
+fn default_mycelium_peers() -> Vec<String> {
+    vec![
+        "tcp://188.40.132.242:9651".into(),
+        "tcp://136.243.47.186:9651".into(),
+    ]
 }
 
 impl Default for Config {
@@ -64,6 +73,7 @@ impl Default for Config {
             default_network_mode: default_network_mode(),
             default_storage_backend: default_storage_backend(),
             default_bridge: default_bridge(),
+            default_mycelium_peers: default_mycelium_peers(),
         }
     }
 }
@@ -100,12 +110,13 @@ mod tests {
         let config = Config::default();
         assert_eq!(config.default_vcpu, 1);
         assert_eq!(config.default_memory_mb, 512);
-        assert_eq!(config.default_network_mode, "tap");
+        assert_eq!(config.default_network_mode, "mycelium");
         assert_eq!(config.default_storage_backend, "block");
         assert_eq!(config.default_bridge, "chvm0");
         assert!(config.kernel_path.is_none());
         assert!(config.virtiofsd_bin.is_none());
         assert!(config.cloud_hypervisor_bin.is_none());
+        assert!(!config.default_mycelium_peers.is_empty());
     }
 
     #[test]
@@ -151,6 +162,7 @@ mod tests {
             default_network_mode: "mycelium".to_string(),
             default_storage_backend: "virtiofs".to_string(),
             default_bridge: "testbr0".to_string(),
+            default_mycelium_peers: default_mycelium_peers(),
         };
 
         let json = serde_json::to_string(&config).unwrap();

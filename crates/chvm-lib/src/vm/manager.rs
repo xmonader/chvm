@@ -13,6 +13,7 @@ const MYCELIUM_PROBE_MAX_RETRIES: usize = 10;
 const MYCELIUM_PROBE_RETRY_DELAY: std::time::Duration = std::time::Duration::from_secs(2);
 use crate::error::{ChvmError, Result};
 use crate::hypervisor;
+use crate::network::mycelium::resolve_default_peers;
 use crate::network::{self, NetworkBackend, SetupConfig};
 use crate::oci;
 use crate::paths::Paths;
@@ -703,7 +704,14 @@ impl VmManager {
             .env(opts.env.clone())
             .port_forwards(opts.port_forwards.clone())
             .mounts(opts.mounts.clone())
-            .mycelium_peers(opts.mycelium_peers.clone());
+            .mycelium_peers({
+                let effective_mode = opts.network_mode.unwrap_or_default();
+                if effective_mode == NetworkMode::Mycelium && opts.mycelium_peers.is_empty() {
+                    resolve_default_peers(&self.config.default_mycelium_peers)
+                } else {
+                    opts.mycelium_peers.clone()
+                }
+            });
 
         if let Some(ic) = image_config {
             builder = builder.image_config(ic);
