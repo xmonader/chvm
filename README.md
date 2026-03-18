@@ -148,7 +148,15 @@ sudo chvm inspect myvm
 
 # Show console logs
 sudo chvm logs myvm
+
+# Show live resource stats (CPU, memory, network, block I/O)
+sudo chvm stats myvm
+
+# JSON output for scripting
+sudo chvm stats myvm --json
 ```
+
+The `stats` command shows CPU allocation, memory, network info (mode, IP address, gateway, mycelium IP, RX/TX traffic), and block I/O counters for a running VM.
 
 ### Executing Commands
 
