@@ -1,5 +1,17 @@
 use crate::network::traits::*;
 
+/// Known public Mycelium peers used as fallback when no peers are configured.
+pub const FALLBACK_PEERS: &[&str] = &["tcp://188.40.132.242:9651", "tcp://136.243.47.186:9651"];
+
+/// Returns `config_peers` if non-empty, otherwise returns [`FALLBACK_PEERS`].
+pub fn resolve_default_peers(config_peers: &[String]) -> Vec<String> {
+    if !config_peers.is_empty() {
+        config_peers.to_vec()
+    } else {
+        FALLBACK_PEERS.iter().map(|s| s.to_string()).collect()
+    }
+}
+
 /// Mycelium networking backend.
 /// Uses network namespaces with a mycelium daemon for IPv6 mesh networking.
 pub struct MyceliumNetwork;

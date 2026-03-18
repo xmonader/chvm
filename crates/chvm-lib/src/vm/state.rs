@@ -33,8 +33,8 @@ pub enum RootfsType {
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum NetworkMode {
-    #[default]
     Tap,
+    #[default]
     Mycelium,
     None,
 }
@@ -357,7 +357,7 @@ mod tests {
     #[test]
     fn network_mode_default() {
         let mode = NetworkMode::default();
-        assert_eq!(mode, NetworkMode::Tap);
+        assert_eq!(mode, NetworkMode::Mycelium);
     }
 
     // VmConfig tests
