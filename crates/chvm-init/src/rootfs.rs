@@ -1,28 +1,88 @@
 use nix::mount::{mount, MntFlags, MsFlags};
 
-pub fn mount_rootfs() -> Result<(), Box<dyn std::error::Error>> {
-    let cmdline = std::fs::read_to_string("/proc/cmdline").unwrap_or_default();
-    let mut root_tag = "rootfs".to_string();
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct RootSpec {
+    source: String,
+    fstype: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct MountInfo {
+    source: String,
+    target: String,
+    fstype: String,
+}
+
+fn parse_root_spec(cmdline: &str) -> RootSpec {
+    let mut source = "/dev/vda".to_string();
+    let mut fstype = None;
 
     for part in cmdline.split_whitespace() {
-        if let Some(tag) = part.strip_prefix("root=") {
-            root_tag = tag.to_string();
-            break;
+        if let Some(root) = part.strip_prefix("root=") {
+            source = root.to_string();
+        } else if let Some(kind) = part.strip_prefix("rootfstype=") {
+            fstype = Some(kind.to_string());
         }
     }
+
+    RootSpec { source, fstype }
+}
+
+fn current_root_mount() -> Option<MountInfo> {
+    let mounts = std::fs::read_to_string("/proc/self/mounts").ok()?;
+    for line in mounts.lines() {
+        let mut fields = line.split_whitespace();
+        let source = fields.next()?;
+        let target = fields.next()?;
+        let fstype = fields.next()?;
+        if target == "/" {
+            return Some(MountInfo {
+                source: source.to_string(),
+                target: target.to_string(),
+                fstype: fstype.to_string(),
+            });
+        }
+    }
+    None
+}
+
+fn needs_root_switch(current: &MountInfo, desired: &RootSpec) -> bool {
+    if desired.source == "rootfs" || desired.fstype.as_deref() == Some("virtiofs") {
+        return !(current.source == "rootfs" && current.fstype == "virtiofs");
+    }
+
+    current.source != desired.source
+}
+
+pub fn should_mount_rootfs() -> bool {
+    let cmdline = std::fs::read_to_string("/proc/cmdline").unwrap_or_default();
+    let desired = parse_root_spec(&cmdline);
+
+    match current_root_mount() {
+        Some(current) => needs_root_switch(&current, &desired),
+        None => true,
+    }
+}
+
+pub fn mount_rootfs() -> Result<(), Box<dyn std::error::Error>> {
+    let cmdline = std::fs::read_to_string("/proc/cmdline").unwrap_or_default();
+    let root = parse_root_spec(&cmdline);
 
     let new_root = "/mnt/rootfs";
     std::fs::create_dir_all(new_root)?;
 
-    println!("[init] Mounting rootfs with tag: {root_tag} at {new_root}");
+    let fstype = if root.source == "rootfs" || root.fstype.as_deref() == Some("virtiofs") {
+        "virtiofs"
+    } else {
+        root.fstype.as_deref().unwrap_or("ext4")
+    };
 
-    mount(
-        Some(root_tag.as_str()),
-        new_root,
-        Some("virtiofs"),
-        MsFlags::empty(),
-        None::<&str>,
-    )?;
+    println!(
+        "[init] Mounting rootfs source {} type {} at {}",
+        root.source, fstype, new_root
+    );
+
+    mount(Some(root.source.as_str()), new_root, Some(fstype), MsFlags::empty(), None::<&str>)?;
 
     // Verify mount
     let sh_path = format!("{new_root}/bin/sh");
@@ -73,4 +133,82 @@ fn switch_root(new_root: &str) -> Result<(), Box<dyn std::error::Error>> {
 
     std::env::set_current_dir("/")?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_root_spec_defaults_to_block_root() {
+        let spec = parse_root_spec("console=hvc0 rw init=/chvm-init");
+        assert_eq!(
+            spec,
+            RootSpec {
+                source: "/dev/vda".into(),
+                fstype: None,
+            }
+        );
+    }
+
+    #[test]
+    fn parse_root_spec_reads_virtiofs_root() {
+        let spec = parse_root_spec("root=rootfs rootfstype=virtiofs init=/chvm-init");
+        assert_eq!(
+            spec,
+            RootSpec {
+                source: "rootfs".into(),
+                fstype: Some("virtiofs".into()),
+            }
+        );
+    }
+
+    #[test]
+    fn block_root_does_not_switch_when_already_on_disk_root() {
+        let current = MountInfo {
+            source: "/dev/vda".into(),
+            target: "/".into(),
+            fstype: "ext4".into(),
+        };
+        let desired = RootSpec {
+            source: "/dev/vda".into(),
+            fstype: None,
+        };
+        assert!(!needs_root_switch(&current, &desired));
+    }
+
+    #[test]
+    fn block_root_switches_from_initramfs() {
+        let current = MountInfo {
+            source: "rootfs".into(),
+            target: "/".into(),
+            fstype: "rootfs".into(),
+        };
+        let desired = RootSpec {
+            source: "/dev/vda".into(),
+            fstype: None,
+        };
+        assert!(needs_root_switch(&current, &desired));
+    }
+
+    #[test]
+    fn virtiofs_root_switches_until_real_root_is_mounted() {
+        let current = MountInfo {
+            source: "tmpfs".into(),
+            target: "/".into(),
+            fstype: "tmpfs".into(),
+        };
+        let desired = RootSpec {
+            source: "rootfs".into(),
+            fstype: Some("virtiofs".into()),
+        };
+        assert!(needs_root_switch(&current, &desired));
+
+        let mounted = MountInfo {
+            source: "rootfs".into(),
+            target: "/".into(),
+            fstype: "virtiofs".into(),
+        };
+        assert!(!needs_root_switch(&mounted, &desired));
+    }
 }

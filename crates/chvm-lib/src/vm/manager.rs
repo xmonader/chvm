@@ -7,10 +7,6 @@ use tracing::{debug, info, warn};
 use crate::config::Config;
 use crate::utils::{atomic_write, FileLock};
 
-/// Maximum retries when probing for mycelium IPv6 address after VM boot.
-const MYCELIUM_PROBE_MAX_RETRIES: usize = 10;
-/// Delay between mycelium IP probe retries.
-const MYCELIUM_PROBE_RETRY_DELAY: std::time::Duration = std::time::Duration::from_secs(2);
 use crate::error::{ChvmError, Result};
 use crate::hypervisor;
 use crate::network::mycelium::resolve_default_peers;
@@ -378,17 +374,6 @@ impl VmManager {
         self.state_store.save(&state)?;
         info!(vm_id = %state.id, pid = pid, "VM started");
 
-        // Probe mycelium IP after boot with retries
-        if state.vm_config.network.mode == NetworkMode::Mycelium {
-            if let Some(ip) = self.probe_mycelium_ip_with_retries(&state).await {
-                if let Some(ref mut ns) = state.network_state {
-                    ns.mycelium_ip = Some(ip.clone());
-                }
-                info!(vm_id = %state.id, mycelium_ip = %ip, "Mycelium IP detected");
-                self.state_store.save(&state)?;
-            }
-        }
-
         Ok(())
     }
 
@@ -610,10 +595,9 @@ impl VmManager {
         // Single-attempt probe with timeout
         let health_timeout = std::time::Duration::from_secs(5);
 
-        let probed_ip = tokio::time::timeout(health_timeout, self.probe_mycelium_ip(&vsock_path))
-            .await
-            .ok()
-            .flatten();
+        let probed_ip = self
+            .probe_mycelium_ip_with_timeout(&vsock_path, health_timeout)
+            .await;
 
         let health = if probed_ip.is_some() {
             MyceliumHealth::Healthy
@@ -934,28 +918,15 @@ impl VmManager {
         None
     }
 
-    /// Probe mycelium IP with retries. Used at boot time to wait for
-    /// the mycelium daemon to start and acquire an address.
-    async fn probe_mycelium_ip_with_retries(&self, state: &RuntimeState) -> Option<String> {
-        let vsock_path = state.vm_config.vsock_socket_path()?;
-
-        for attempt in 0..MYCELIUM_PROBE_MAX_RETRIES {
-            if attempt > 0 {
-                tokio::time::sleep(MYCELIUM_PROBE_RETRY_DELAY).await;
-            }
-
-            if let Some(ip) = self.probe_mycelium_ip(&vsock_path).await {
-                return Some(ip);
-            }
-
-            debug!(
-                attempt = attempt,
-                "Mycelium IP probe attempt failed, retrying"
-            );
-        }
-
-        warn!("Could not detect mycelium IP after retries");
-        None
+    async fn probe_mycelium_ip_with_timeout(
+        &self,
+        vsock_path: &str,
+        timeout: std::time::Duration,
+    ) -> Option<String> {
+        tokio::time::timeout(timeout, self.probe_mycelium_ip(vsock_path))
+            .await
+            .ok()
+            .flatten()
     }
 
     async fn teardown_network(&self, state: &RuntimeState) -> Result<()> {
@@ -1079,7 +1050,95 @@ fn validate_rootfs(path: &Path) -> Result<()> {
             "directory does not appear to be a valid rootfs (missing bin, usr, lib, or etc)".into(),
         ));
     }
+
+    if let Some((candidate, machine)) = detect_rootfs_elf_machine(path)? {
+        const EM_X86_64: u16 = 62;
+        if machine != EM_X86_64 {
+            return Err(ChvmError::InvalidRootfs(format!(
+                "rootfs executable {} targets unsupported ELF machine {} (expected x86_64)",
+                candidate, machine
+            )));
+        }
+    }
+
     Ok(())
+}
+
+fn detect_rootfs_elf_machine(path: &Path) -> Result<Option<(String, u16)>> {
+    let candidates = [
+        "bin/sh",
+        "bin/bash",
+        "bin/busybox",
+        "bin/ls",
+        "usr/bin/env",
+    ];
+
+    for candidate in candidates {
+        let Some(resolved) = resolve_rootfs_executable(path, candidate)? else {
+            continue;
+        };
+        let Some(machine) = read_elf_machine(&resolved)? else {
+            continue;
+        };
+        return Ok(Some((candidate.to_string(), machine)));
+    }
+
+    Ok(None)
+}
+
+fn resolve_rootfs_executable(rootfs: &Path, relative_path: &str) -> Result<Option<PathBuf>> {
+    let mut current = rootfs.join(relative_path);
+    if std::fs::symlink_metadata(&current).is_err() {
+        return Ok(None);
+    }
+
+    for _ in 0..8 {
+        let metadata = std::fs::symlink_metadata(&current)?;
+        if metadata.file_type().is_symlink() {
+            let target = std::fs::read_link(&current)?;
+            current = if target.is_absolute() {
+                rootfs.join(target.strip_prefix("/").unwrap_or(&target))
+            } else {
+                current
+                    .parent()
+                    .unwrap_or(rootfs)
+                    .join(target)
+                    .components()
+                    .collect()
+            };
+            continue;
+        }
+
+        if metadata.is_file() {
+            return Ok(Some(current));
+        }
+        return Ok(None);
+    }
+
+    Err(ChvmError::InvalidRootfs(format!(
+        "too many symlink levels while resolving {}",
+        relative_path
+    )))
+}
+
+fn read_elf_machine(path: &Path) -> Result<Option<u16>> {
+    let bytes = std::fs::read(path)?;
+    if bytes.len() < 20 || &bytes[..4] != b"\x7fELF" {
+        return Ok(None);
+    }
+
+    let machine = match bytes[5] {
+        1 => u16::from_le_bytes([bytes[18], bytes[19]]),
+        2 => u16::from_be_bytes([bytes[18], bytes[19]]),
+        _ => {
+            return Err(ChvmError::InvalidRootfs(format!(
+                "unsupported ELF endianness in {}",
+                path.display()
+            )))
+        }
+    };
+
+    Ok(Some(machine))
 }
 
 /// Parse `ip -6 -o addr show` output for a non-link-local IPv6 address.
@@ -1343,5 +1402,36 @@ mod tests {
             vm_config.network.mycelium_peers,
             resolve_default_peers(&manager.config.default_mycelium_peers)
         );
+    }
+
+    fn write_elf(path: &Path, machine: u16) {
+        let mut bytes = vec![0u8; 64];
+        bytes[..4].copy_from_slice(b"\x7fELF");
+        bytes[4] = 2;
+        bytes[5] = 1;
+        bytes[18..20].copy_from_slice(&machine.to_le_bytes());
+        std::fs::write(path, bytes).unwrap();
+    }
+
+    #[test]
+    fn validate_rootfs_accepts_x86_64_elf() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(tmp.path().join("bin")).unwrap();
+        std::fs::create_dir_all(tmp.path().join("etc")).unwrap();
+        write_elf(&tmp.path().join("bin/busybox"), 62);
+        std::os::unix::fs::symlink("/bin/busybox", tmp.path().join("bin/sh")).unwrap();
+
+        assert!(validate_rootfs(tmp.path()).is_ok());
+    }
+
+    #[test]
+    fn validate_rootfs_rejects_non_x86_64_elf() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(tmp.path().join("bin")).unwrap();
+        std::fs::create_dir_all(tmp.path().join("etc")).unwrap();
+        write_elf(&tmp.path().join("bin/ls"), 183);
+
+        let err = validate_rootfs(tmp.path()).unwrap_err().to_string();
+        assert!(err.contains("unsupported ELF machine"));
     }
 }

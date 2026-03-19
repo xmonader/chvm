@@ -20,20 +20,21 @@ else
     CHVM_HOME="$HOME/.chvm"
 fi
 
-# Find alpine rootfs from OCI cache
+# Find a cached x86_64 Linux rootfs from OCI cache
 ALPINE_ROOTFS=""
 for digest_dir in "$CHVM_HOME"/images/*/; do
     rootfs_dir="${digest_dir}rootfs"
-    if [ -d "$rootfs_dir" ] && [ -f "$rootfs_dir/bin/sh" ]; then
+    if [ -d "$rootfs_dir" ] && [ -f "$rootfs_dir/bin/sh" ] && \
+       file -L "$rootfs_dir/bin/sh" 2>/dev/null | grep -q "x86-64"; then
         ALPINE_ROOTFS="$rootfs_dir"
         break
     fi
 done
 
 if [ -z "$ALPINE_ROOTFS" ]; then
-    skip "Local rootfs: run from cached OCI rootfs" "No extracted rootfs found in $CHVM_HOME/images/"
-    skip "Local rootfs: echo command produces output" "Skipped (no rootfs)"
-    skip "Local rootfs: ls / contains expected dirs" "Skipped (no rootfs)"
+    skip "Local rootfs: run from cached OCI rootfs" "No extracted x86_64 rootfs found in $CHVM_HOME/images/"
+    skip "Local rootfs: echo command produces output" "Skipped (no x86_64 rootfs)"
+    skip "Local rootfs: ls / contains expected dirs" "Skipped (no x86_64 rootfs)"
     test_end
     export_results
     exit 0
@@ -41,7 +42,8 @@ fi
 
 # 1. Run a command using --rootfs with a cached OCI rootfs
 run_output=$($CHVM run --rm --rootfs "$ALPINE_ROOTFS" --name "${TEST_PREFIX}-rootfs1" alpine:latest echo "rootfs_test_ok" 2>&1) || true
-if echo "$run_output" | grep -q "rootfs_test_ok"; then
+clean_run_output=$(printf '%s\n' "$run_output" | tr -d '\r' | sed -E 's/\x1B\[[0-9;]*[[:alpha:]]//g')
+if printf '%s\n' "$clean_run_output" | grep -Eq '^rootfs_test_ok$'; then
     pass "Local rootfs: echo command produces output"
 else
     fail "Local rootfs: echo command produces output"
@@ -50,7 +52,10 @@ fi
 
 # 2. Verify the rootfs has expected filesystem structure
 ls_output=$($CHVM run --rm --rootfs "$ALPINE_ROOTFS" --name "${TEST_PREFIX}-rootfs2" alpine:latest ls / 2>&1) || true
-if echo "$ls_output" | grep -q "bin" && echo "$ls_output" | grep -q "etc" && echo "$ls_output" | grep -q "usr"; then
+clean_ls_output=$(printf '%s\n' "$ls_output" | tr -d '\r' | sed -E 's/\x1B\[[0-9;]*[[:alpha:]]//g')
+if echo "$clean_ls_output" | grep -Eq '(^|[[:space:]])bin([[:space:]]|$)' && \
+   echo "$clean_ls_output" | grep -Eq '(^|[[:space:]])etc([[:space:]]|$)' && \
+   echo "$clean_ls_output" | grep -Eq '(^|[[:space:]])usr([[:space:]]|$)'; then
     pass "Local rootfs: ls / contains expected dirs"
 else
     fail "Local rootfs: ls / contains expected dirs"

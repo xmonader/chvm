@@ -58,13 +58,7 @@ pub fn handle_exec(fd: i32) {
 
     // Execute command
     let cmd_path = &req.cmd[0];
-    let resolved = if !cmd_path.starts_with('/') {
-        crate::helpers::find_binary(cmd_path, &[]).unwrap_or_else(|| cmd_path.clone())
-    } else {
-        cmd_path.clone()
-    };
-
-    let mut cmd = Command::new(&resolved);
+    let mut cmd = Command::new(cmd_path);
     cmd.args(&req.cmd[1..]);
 
     for env_var in &req.env {

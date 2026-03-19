@@ -54,13 +54,17 @@ impl KernelManager {
         // For mycelium, prefer kernel with IPv6 + TUN
         if network_mode == "mycelium" {
             let default = self.kernel_dir.join("vmlinux");
-            if default.exists() && self.kernel_supports_mycelium(&default) {
+            if default.exists() && self.kernel_supports_runtime(&default, true) {
                 return Ok(default.to_string_lossy().to_string());
             }
 
             let mycelium_kernel = self.kernel_dir.join("vmlinux-mycelium");
             if mycelium_kernel.exists() {
                 return Ok(mycelium_kernel.to_string_lossy().to_string());
+            }
+
+            if let Some(custom) = self.find_custom_kernel(&kernels) {
+                return Ok(custom.to_string_lossy().to_string());
             }
 
             let host_kernel = self.kernel_dir.join("vmlinux-host");
@@ -76,6 +80,14 @@ impl KernelManager {
 
         // Default: vmlinux symlink or first available
         let default = self.kernel_dir.join("vmlinux");
+        if default.exists() && self.kernel_supports_runtime(&default, false) {
+            return Ok(default.to_string_lossy().to_string());
+        }
+
+        if let Some(custom) = self.find_custom_kernel(&kernels) {
+            return Ok(custom.to_string_lossy().to_string());
+        }
+
         if default.exists() {
             return Ok(default.to_string_lossy().to_string());
         }
@@ -255,18 +267,42 @@ impl KernelManager {
         )
     }
 
-    fn kernel_supports_mycelium(&self, path: &Path) -> bool {
+    fn kernel_supports_runtime(&self, path: &Path, require_mycelium: bool) -> bool {
         if let Some(caps) = self.detect_capabilities(path) {
-            return caps.has_ipv6 && caps.has_tun;
+            let has_core = caps.has_vsock && caps.has_virtio_block;
+            return if require_mycelium {
+                has_core && caps.has_ipv6 && caps.has_tun
+            } else {
+                has_core
+            };
         }
-        let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
-        if name.contains("host") {
+
+        let resolved = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+        let name = resolved
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or_default();
+
+        if name.contains("chvm") {
             return true;
         }
         if name.contains("firecracker") {
             return false;
         }
-        true // Assume it works
+        if name.contains("host") {
+            return false;
+        }
+
+        false
+    }
+
+    fn find_custom_kernel(&self, kernels: &[KernelInfo]) -> Option<PathBuf> {
+        let mut candidates: Vec<&KernelInfo> = kernels
+            .iter()
+            .filter(|kernel| kernel.name.starts_with("vmlinux-chvm"))
+            .collect();
+        candidates.sort_by(|a, b| a.name.cmp(&b.name));
+        candidates.last().map(|kernel| kernel.path.clone())
     }
 }
 

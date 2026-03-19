@@ -29,8 +29,8 @@ fn main() {
         eprintln!("[init] Warning: Failed to create device nodes: {e}");
     }
 
-    // Check if rootfs is already mounted (block device boot) or needs virtiofs
-    if !std::path::Path::new("/bin/sh").exists() {
+    // Mount and switch to the configured rootfs unless we're already on it.
+    if rootfs::should_mount_rootfs() {
         if let Err(e) = rootfs::mount_rootfs() {
             eprintln!("[init] Error mounting rootfs: {e}");
             signal::poweroff(1);
@@ -82,16 +82,9 @@ fn main() {
     let cmd_path = &config.cmd[0];
     let cmd_args = &config.cmd[1..];
 
-    // Look up command in PATH if not absolute
-    let resolved = if !cmd_path.starts_with('/') {
-        helpers::find_binary(cmd_path, &[]).unwrap_or_else(|| cmd_path.clone())
-    } else {
-        cmd_path.clone()
-    };
-
     println!("[init] Executing: {:?}", config.cmd);
 
-    let mut cmd = Command::new(&resolved);
+    let mut cmd = Command::new(cmd_path);
     cmd.args(cmd_args);
 
     // Set environment

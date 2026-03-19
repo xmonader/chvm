@@ -46,7 +46,16 @@ sleep 5
 
 # Install and start redis
 setup_output=$(setup_redis "$PF_VM" 2>&1) || true
-if $CHVM exec "$PF_VM" -- pgrep redis-server >/dev/null 2>&1; then
+redis_ready=false
+for attempt in 1 2 3 4 5; do
+    redis_ping=$($CHVM exec "$PF_VM" -- redis-cli PING 2>&1) || true
+    if echo "$redis_ping" | grep -q "PONG"; then
+        redis_ready=true
+        break
+    fi
+    sleep 2
+done
+if $redis_ready; then
     pass "Redis installed and running in port-forward VM"
 else
     fail "Redis installed and running in port-forward VM" "redis-server not running"
@@ -156,7 +165,16 @@ sleep 5
 
 # Install and start redis on the server
 setup_output=$(setup_redis "$MYC_SERVER" 2>&1) || true
-if $CHVM exec "$MYC_SERVER" -- pgrep redis-server >/dev/null 2>&1; then
+redis_ready=false
+for attempt in 1 2 3 4 5; do
+    redis_ping=$($CHVM exec "$MYC_SERVER" -- redis-cli PING 2>&1) || true
+    if echo "$redis_ping" | grep -q "PONG"; then
+        redis_ready=true
+        break
+    fi
+    sleep 2
+done
+if $redis_ready; then
     pass "Redis running in mycelium VM"
 else
     fail "Redis running in mycelium VM" "redis-server not running"
