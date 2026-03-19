@@ -138,8 +138,8 @@ pub struct RunArgs {
     #[arg(long, default_value = "512")]
     pub memory: u32,
 
-    /// Storage backend (block, virtiofs)
-    #[arg(long, default_value = "block")]
+    /// Storage backend (auto, block, virtiofs)
+    #[arg(long, default_value = "auto")]
     pub storage: String,
 
     /// Network mode (tap, mycelium, none)
@@ -197,7 +197,7 @@ pub struct CreateArgs {
     #[arg(long, default_value = "512")]
     pub memory: u32,
 
-    #[arg(long, default_value = "block")]
+    #[arg(long, default_value = "auto")]
     pub storage: String,
 
     #[arg(long, default_value = "mycelium")]

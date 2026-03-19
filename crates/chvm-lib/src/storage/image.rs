@@ -104,36 +104,8 @@ pub fn create_ext4_image(
         }
 
         // Inject binaries and modules
-        inject_binary(
-            &mount_point,
-            "chvm-init",
-            "chvm-init",
-            &[
-                "./bin/chvm-init",
-                "./target/x86_64-unknown-linux-musl/release/chvm-init",
-                "./target/x86_64-unknown-linux-musl/debug/chvm-init",
-                "./target/release/chvm-init",
-                "./target/debug/chvm-init",
-                "/usr/local/bin/chvm-init",
-            ],
-            Some(".chvm/bin/chvm-init"),
-        );
-
+        inject_runtime_binaries(&mount_point, inject_mycelium);
         inject_kernel_modules(&mount_point);
-
-        if inject_mycelium {
-            inject_binary(
-                &mount_point,
-                "usr/bin/mycelium",
-                "mycelium",
-                &[
-                    "./bin/mycelium",
-                    "/usr/local/bin/mycelium",
-                    "/usr/bin/mycelium",
-                ],
-                Some(".chvm/bin/mycelium"),
-            );
-        }
 
         Ok(())
     })();
@@ -146,6 +118,38 @@ pub fn create_ext4_image(
     // _guard handles umount + cleanup on drop
     info!(image = %image_path.display(), "Block image created");
     Ok(())
+}
+
+/// Inject guest runtime binaries into a rootfs tree.
+pub fn inject_runtime_binaries(rootfs_path: &Path, inject_mycelium: bool) {
+    inject_binary(
+        rootfs_path,
+        "chvm-init",
+        "chvm-init",
+        &[
+            "./bin/chvm-init",
+            "./target/x86_64-unknown-linux-musl/release/chvm-init",
+            "./target/x86_64-unknown-linux-musl/debug/chvm-init",
+            "./target/release/chvm-init",
+            "./target/debug/chvm-init",
+            "/usr/local/bin/chvm-init",
+        ],
+        Some(".chvm/bin/chvm-init"),
+    );
+
+    if inject_mycelium {
+        inject_binary(
+            rootfs_path,
+            "usr/bin/mycelium",
+            "mycelium",
+            &[
+                "./bin/mycelium",
+                "/usr/local/bin/mycelium",
+                "/usr/bin/mycelium",
+            ],
+            Some(".chvm/bin/mycelium"),
+        );
+    }
 }
 
 /// Search for a binary in the given paths and inject it into the mount point.

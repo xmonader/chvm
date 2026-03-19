@@ -38,17 +38,14 @@ pub fn build_args(config: &VmConfig, vm_dir: &Path) -> Vec<String> {
         push_arg(&mut args, "--initramfs", initrd);
     }
 
+    let mut fs_entries = Vec::new();
     match config.rootfs.rootfs_type {
-        RootfsType::VirtioFs => push_arg(
-            &mut args,
-            "--fs",
-            format!("tag=rootfs,socket={}", config.rootfs.source),
-        ),
-        RootfsType::VirtioBlock => push_arg(
-            &mut args,
-            "--disk",
-            format!("path={}", config.rootfs.source),
-        ),
+        RootfsType::VirtioFs => {
+            fs_entries.push(format!("tag=rootfs,socket={}", config.rootfs.source));
+        }
+        RootfsType::VirtioBlock => {
+            push_arg(&mut args, "--disk", format!("path={}", config.rootfs.source));
+        }
     }
 
     push_arg(&mut args, "--console", format!("file={log_path}"));
@@ -65,12 +62,13 @@ pub fn build_args(config: &VmConfig, vm_dir: &Path) -> Vec<String> {
     for mount in &config.mounts {
         if mount.mount_type.as_deref() == Some("virtiofs") || mount.mount_type.is_none() {
             let tag = mount.tag.as_deref().unwrap_or(&mount.target);
-            push_arg(
-                &mut args,
-                "--fs",
-                format!("tag={tag},socket={}", mount.source),
-            );
+            fs_entries.push(format!("tag={tag},socket={}", mount.source));
         }
+    }
+
+    if !fs_entries.is_empty() {
+        args.push("--fs".into());
+        args.extend(fs_entries);
     }
 
     if config.vsock_cid > 0 {
@@ -169,4 +167,76 @@ pub fn find_ch_binary() -> Option<String> {
             "/usr/bin/cloud-hypervisor",
         ],
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::vm::state::{
+        InitConfig, KernelConfig, MountConfig, NetworkConfig, RootfsConfig,
+    };
+
+    fn sample_vm_config(rootfs_type: RootfsType, mounts: Vec<MountConfig>) -> VmConfig {
+        VmConfig {
+            id: "vm1".into(),
+            name: "vm1".into(),
+            vcpu: 1,
+            memory_mb: 512,
+            kernel: KernelConfig {
+                path: "/kernel".into(),
+                cmdline: "console=hvc0".into(),
+                initrd_path: None,
+            },
+            rootfs: RootfsConfig {
+                source: "/rootfs.sock".into(),
+                rootfs_type,
+                read_only: false,
+            },
+            network: NetworkConfig {
+                mode: crate::vm::state::NetworkMode::None,
+                tap_device: None,
+                mac_address: None,
+                ip_address: None,
+                gateway: None,
+                port_forwards: vec![],
+                mycelium_peers: vec![],
+                mycelium_key: None,
+            },
+            init: InitConfig {
+                cmd: vec!["/bin/sh".into()],
+                env: vec![],
+                working_dir: Some("/".into()),
+            },
+            mounts,
+            log_path: None,
+            vsock_cid: 3,
+            state_dir: Some("/vm".into()),
+        }
+    }
+
+    #[test]
+    fn build_args_uses_single_fs_flag_for_rootfs_and_mounts() {
+        let config = sample_vm_config(
+            RootfsType::VirtioFs,
+            vec![MountConfig {
+                source: "/mount.sock".into(),
+                target: "/mnt/data".into(),
+                mount_type: Some("virtiofs".into()),
+                read_only: false,
+                tag: Some("mount0".into()),
+            }],
+        );
+
+        let args = build_args(&config, Path::new("/vm"));
+        let fs_positions: Vec<_> = args
+            .iter()
+            .enumerate()
+            .filter_map(|(idx, arg)| (arg == "--fs").then_some(idx))
+            .collect();
+
+        assert_eq!(fs_positions.len(), 1);
+        let fs_index = fs_positions[0];
+        assert_eq!(args[fs_index + 1], "tag=rootfs,socket=/rootfs.sock");
+        assert_eq!(args[fs_index + 2], "tag=mount0,socket=/mount.sock");
+    }
 }

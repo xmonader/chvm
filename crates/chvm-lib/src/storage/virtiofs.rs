@@ -3,7 +3,7 @@ use std::process::{Command, Stdio};
 
 use tracing::info;
 
-use crate::storage::image::inject_binary;
+use crate::storage::image::inject_runtime_binaries;
 use crate::storage::traits::*;
 
 /// Virtio-FS storage backend using virtiofsd.
@@ -49,21 +49,9 @@ impl StorageBackend for VirtioFsStorage {
             );
         }
 
-        // Inject chvm-init into the overlay so the guest can boot
-        inject_binary(
-            Path::new(&merged_dir),
-            "chvm-init",
-            "chvm-init",
-            &[
-                "./bin/chvm-init",
-                "./target/x86_64-unknown-linux-musl/release/chvm-init",
-                "./target/x86_64-unknown-linux-musl/debug/chvm-init",
-                "./target/release/chvm-init",
-                "./target/debug/chvm-init",
-                "/usr/local/bin/chvm-init",
-            ],
-            Some(".chvm/bin/chvm-init"),
-        );
+        if config.inject_runtime_binaries {
+            inject_runtime_binaries(Path::new(&merged_dir), config.inject_mycelium);
+        }
 
         // Start virtiofsd
         let socket_path = storage_dir.join("virtiofsd.sock");

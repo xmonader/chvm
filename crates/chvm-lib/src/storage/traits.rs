@@ -8,6 +8,7 @@ pub struct PrepareConfig {
     pub read_only: bool,
     pub tag: String,
     pub inject_mycelium: bool,
+    pub inject_runtime_binaries: bool,
 }
 
 /// Result of storage preparation.

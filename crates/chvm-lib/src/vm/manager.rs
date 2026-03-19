@@ -5,6 +5,7 @@ use chrono::Utc;
 use tracing::{debug, info, warn};
 
 use crate::config::Config;
+use crate::kernel::KernelManager;
 use crate::utils::{atomic_write, FileLock};
 
 use crate::error::{ChvmError, Result};
@@ -699,20 +700,22 @@ impl VmManager {
         image_config: Option<oci::ImageConfig>,
         vm_dir: &Path,
     ) -> Result<VmConfig> {
-        let storage_type = match opts
-            .storage_backend
-            .as_deref()
-            .unwrap_or(&self.config.default_storage_backend)
-        {
-            "virtiofs" => RootfsType::VirtioFs,
-            _ => RootfsType::VirtioBlock,
-        };
-
         let net_mode = opts
             .network_mode
             .unwrap_or_else(|| self.config.default_network_mode.parse().unwrap_or_default());
         let kernel_path =
             self.resolve_kernel_path(opts.kernel_path.as_deref(), &net_mode.to_string())?;
+        let storage_backend =
+            self.select_storage_backend(opts.storage_backend.as_deref(), &kernel_path)?;
+        let storage_type = match storage_backend.as_str() {
+            "virtiofs" => RootfsType::VirtioFs,
+            "block" => RootfsType::VirtioBlock,
+            other => {
+                return Err(ChvmError::ConfigError(format!(
+                    "invalid storage backend: {other}"
+                )));
+            }
+        };
 
         let mut builder = VmBuilder::new(vm_id.to_string(), name.to_string())
             .rootfs(rootfs_path, storage_type)
@@ -744,9 +747,7 @@ impl VmManager {
         if let Some(net) = opts.network_mode {
             builder = builder.network_mode(net);
         }
-        if let Some(ref storage) = opts.storage_backend {
-            builder = builder.storage_backend(storage.clone());
-        }
+        builder = builder.storage_backend(storage_backend);
 
         Ok(builder.build(&self.config))
     }
@@ -764,25 +765,92 @@ impl VmManager {
         kernel_mgr.select_kernel(network_mode)
     }
 
-    async fn prepare_storage(&self, state: &RuntimeState, vm_dir: &Path) -> Result<StorageResult> {
+    async fn prepare_storage(
+        &mut self,
+        state: &RuntimeState,
+        vm_dir: &Path,
+    ) -> Result<StorageResult> {
         let backend: Box<dyn StorageBackend> = match state.vm_config.rootfs.rootfs_type {
             RootfsType::VirtioBlock => Box::new(storage::block::BlockStorage),
             RootfsType::VirtioFs => Box::new(storage::virtiofs::VirtioFsStorage),
         };
+        let inject_mycelium = state.vm_config.network.mode == NetworkMode::Mycelium;
+        let (rootfs_path, inject_runtime_binaries) =
+            self.resolve_storage_rootfs_source(state, inject_mycelium)?;
 
         let config = PrepareConfig {
             vm_id: state.id.clone(),
-            rootfs_path: state.vm_config.rootfs.source.clone(),
+            rootfs_path,
             state_dir: vm_dir.to_path_buf(),
             read_only: state.vm_config.rootfs.read_only,
             tag: "rootfs".into(),
-            inject_mycelium: state.vm_config.network.mode == NetworkMode::Mycelium,
+            inject_mycelium,
+            inject_runtime_binaries,
         };
 
         backend
             .prepare(&config)
             .await
             .map_err(|e| ChvmError::StorageError(e.to_string()))
+    }
+
+    fn select_storage_backend(&self, requested: Option<&str>, kernel_path: &str) -> Result<String> {
+        let backend = requested.unwrap_or(&self.config.default_storage_backend);
+        match backend {
+            "block" | "virtiofs" => Ok(backend.to_string()),
+            "auto" => {
+                if self.kernel_supports_default_virtiofs(Path::new(kernel_path)) {
+                    Ok("virtiofs".into())
+                } else {
+                    Ok("block".into())
+                }
+            }
+            other => Err(ChvmError::ConfigError(format!(
+                "invalid storage backend: {other}"
+            ))),
+        }
+    }
+
+    fn kernel_supports_default_virtiofs(&self, kernel_path: &Path) -> bool {
+        let kernel_mgr = KernelManager::new(&self.paths.kernels);
+        let resolved =
+            std::fs::canonicalize(kernel_path).unwrap_or_else(|_| kernel_path.to_path_buf());
+        let is_chvm_kernel = resolved
+            .file_name()
+            .and_then(|name| name.to_str())
+            .is_some_and(|name| name.contains("chvm"));
+        if !is_chvm_kernel {
+            return false;
+        }
+
+        match kernel_mgr.detect_capabilities(kernel_path) {
+            Some(caps) => caps.has_vsock && caps.has_virtiofs,
+            None => true,
+        }
+    }
+
+    fn resolve_storage_rootfs_source(
+        &mut self,
+        state: &RuntimeState,
+        inject_mycelium: bool,
+    ) -> Result<(String, bool)> {
+        if let Some(ref digest) = state.image_digest {
+            let cached = self.image_cache.get(digest)?;
+            return match state.vm_config.rootfs.rootfs_type {
+                RootfsType::VirtioFs => Ok((
+                    self.image_cache
+                        .ensure_prepared_rootfs(&cached, inject_mycelium)?,
+                    false,
+                )),
+                RootfsType::VirtioBlock => Ok((self.image_cache.ensure_rootfs(&cached)?, true)),
+            };
+        }
+
+        if let Some(local_rootfs) = state.image_ref.strip_prefix("local:") {
+            return Ok((local_rootfs.to_string(), true));
+        }
+
+        Ok((state.vm_config.rootfs.source.clone(), true))
     }
 
     async fn setup_network(&self, state: &mut RuntimeState, vm_dir: &Path) -> Result<()> {
@@ -971,6 +1039,7 @@ impl VmManager {
                 read_only: mount.read_only,
                 tag: tag.clone(),
                 inject_mycelium: false,
+                inject_runtime_binaries: false,
             };
 
             match virtiofs.prepare(&config).await {
@@ -1010,6 +1079,20 @@ impl VmManager {
                 if let Err(e) = nix::mount::umount2(&merged, nix::mount::MntFlags::MNT_DETACH) {
                     warn!(path = %merged.display(), error = %e, "Failed to unmount overlay during cleanup");
                 }
+            }
+        }
+        let vm_dir = self.paths.vm_dir(&state.id);
+        cleanup_virtiofs_state_dir(&vm_dir.join("storage"));
+        if let Ok(entries) = std::fs::read_dir(&vm_dir) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if !entry.file_type().map(|ft| ft.is_dir()).unwrap_or(false) {
+                    continue;
+                }
+                if !entry.file_name().to_string_lossy().starts_with("mount-") {
+                    continue;
+                }
+                cleanup_virtiofs_state_dir(&path.join("storage"));
             }
         }
     }
@@ -1065,13 +1148,7 @@ fn validate_rootfs(path: &Path) -> Result<()> {
 }
 
 fn detect_rootfs_elf_machine(path: &Path) -> Result<Option<(String, u16)>> {
-    let candidates = [
-        "bin/sh",
-        "bin/bash",
-        "bin/busybox",
-        "bin/ls",
-        "usr/bin/env",
-    ];
+    let candidates = ["bin/sh", "bin/bash", "bin/busybox", "bin/ls", "usr/bin/env"];
 
     for candidate in candidates {
         let Some(resolved) = resolve_rootfs_executable(path, candidate)? else {
@@ -1217,6 +1294,41 @@ fn kill_child_process(pid: i32) {
         nix::unistd::Pid::from_raw(pid),
         nix::sys::signal::Signal::SIGKILL,
     );
+}
+
+fn kill_virtiofsd_by_fragment(fragment: &str) {
+    let Ok(entries) = std::fs::read_dir("/proc") else {
+        return;
+    };
+
+    for entry in entries.flatten() {
+        let Ok(pid) = entry.file_name().to_string_lossy().parse::<i32>() else {
+            continue;
+        };
+        let cmdline_path = entry.path().join("cmdline");
+        let Ok(cmdline) = std::fs::read(&cmdline_path) else {
+            continue;
+        };
+        let cmdline = String::from_utf8_lossy(&cmdline);
+        if cmdline.contains("virtiofsd") && cmdline.contains(fragment) {
+            kill_child_process(pid);
+        }
+    }
+}
+
+fn cleanup_virtiofs_state_dir(storage_dir: &Path) {
+    let socket_path = storage_dir.join("virtiofsd.sock");
+    let socket_fragment = socket_path.to_string_lossy();
+    kill_virtiofsd_by_fragment(socket_fragment.as_ref());
+    let dir_fragment = storage_dir.to_string_lossy();
+    kill_virtiofsd_by_fragment(dir_fragment.as_ref());
+
+    let merged = storage_dir.join("overlay/merged");
+    if let Err(e) = nix::mount::umount2(&merged, nix::mount::MntFlags::MNT_DETACH) {
+        if e != nix::errno::Errno::EINVAL && e != nix::errno::Errno::ENOENT {
+            warn!(path = %merged.display(), error = %e, "Failed to unmount overlay during cleanup");
+        }
+    }
 }
 
 async fn wait_for_exit(pid: i32, timeout: std::time::Duration) {
@@ -1370,7 +1482,7 @@ mod tests {
         let paths = Paths::new(tmp.path().join("chvm"));
         let manager = VmManager::new(Config::default(), paths).unwrap();
         let vm_dir = tmp.path().join("vm");
-        let kernel_path = tmp.path().join("vmlinux");
+        let kernel_path = tmp.path().join("vmlinux-chvm-test");
         std::fs::create_dir_all(&vm_dir).unwrap();
         std::fs::write(&kernel_path, b"kernel").unwrap();
 
@@ -1402,6 +1514,70 @@ mod tests {
             vm_config.network.mycelium_peers,
             resolve_default_peers(&manager.config.default_mycelium_peers)
         );
+        assert_eq!(vm_config.rootfs.rootfs_type, RootfsType::VirtioFs);
+    }
+
+    #[test]
+    fn build_vm_config_auto_falls_back_to_block_for_non_chvm_kernel() {
+        let tmp = tempfile::tempdir().unwrap();
+        let paths = Paths::new(tmp.path().join("chvm"));
+        let manager = VmManager::new(Config::default(), paths).unwrap();
+        let vm_dir = tmp.path().join("vm");
+        let kernel_path = tmp.path().join("vmlinux-host");
+        std::fs::create_dir_all(&vm_dir).unwrap();
+        std::fs::write(&kernel_path, b"kernel").unwrap();
+
+        let opts = CreateOptions {
+            name: Some("vm".into()),
+            image_ref: Some("alpine:latest".into()),
+            rootfs_path: None,
+            vcpu: None,
+            memory_mb: None,
+            storage_backend: Some("auto".into()),
+            network_mode: Some(NetworkMode::None),
+            port_forwards: vec![],
+            env: vec![],
+            cmd: vec![],
+            mounts: vec![],
+            kernel_path: Some(kernel_path.to_string_lossy().to_string()),
+            detach: false,
+            remove_after: false,
+            mycelium_peers: vec![],
+            credentials: None,
+        };
+
+        let vm_config = manager
+            .build_vm_config("a1b2c3d4e5f6", "vm", &opts, "/rootfs".into(), None, &vm_dir)
+            .unwrap();
+
+        assert_eq!(vm_config.rootfs.rootfs_type, RootfsType::VirtioBlock);
+    }
+
+    #[test]
+    fn resolve_storage_rootfs_source_uses_local_rootfs_metadata_for_virtiofs_restart() {
+        let temp = tempfile::tempdir().unwrap();
+        let paths = Paths::new(temp.path().join("chvm"));
+        let mut manager = VmManager::new(Config::default(), paths).unwrap();
+        let rootfs = temp.path().join("rootfs");
+        std::fs::create_dir_all(&rootfs).unwrap();
+
+        let mut state = make_state("a1b2c3d4e5f6", "vm");
+        state.image_ref = format!("local:{}", rootfs.display());
+        state.vm_config.rootfs.rootfs_type = RootfsType::VirtioFs;
+        state.vm_config.rootfs.source = temp
+            .path()
+            .join("vm")
+            .join("storage")
+            .join("virtiofsd.sock")
+            .to_string_lossy()
+            .to_string();
+
+        let (resolved, inject_runtime_binaries) = manager
+            .resolve_storage_rootfs_source(&state, false)
+            .unwrap();
+
+        assert_eq!(resolved, rootfs.to_string_lossy());
+        assert!(inject_runtime_binaries);
     }
 
     fn write_elf(path: &Path, machine: u16) {

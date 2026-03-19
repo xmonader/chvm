@@ -159,6 +159,15 @@ pub fn build_create_options(
         .network()
         .parse::<NetworkMode>()
         .map_err(|e| anyhow::anyhow!("invalid network mode '{}': {e}", args.network()))?;
+    let storage_backend = match args.storage() {
+        "auto" | "block" | "virtiofs" => args.storage().to_string(),
+        other => {
+            return Err(anyhow::anyhow!(
+                "invalid storage backend '{}': expected auto, block, or virtiofs",
+                other
+            ));
+        }
+    };
 
     Ok(CreateOptions {
         name: args.name(),
@@ -170,7 +179,7 @@ pub fn build_create_options(
         rootfs_path: args.rootfs(),
         vcpu: Some(args.cpus()),
         memory_mb: Some(args.memory()),
-        storage_backend: Some(args.storage().to_string()),
+        storage_backend: Some(storage_backend),
         network_mode: Some(network_mode),
         port_forwards,
         env: args.env().to_vec(),
