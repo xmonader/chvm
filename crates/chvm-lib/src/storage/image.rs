@@ -86,56 +86,61 @@ pub fn create_ext4_image(
         );
     }
 
-    // RAII guard ensures umount + cleanup even on panic/early return
-    let _guard = MountGuard {
-        mount_point: mount_point.clone(),
-    };
+    let build_result = (|| -> anyhow::Result<()> {
+        // RAII guard ensures umount + cleanup even on panic/early return
+        let _guard = MountGuard {
+            mount_point: mount_point.clone(),
+        };
 
-    // Copy rootfs contents (cp -a preserves permissions/symlinks/devices)
-    let cp_result = Command::new("cp")
-        .arg("-a")
-        .arg(format!("{}/.", rootfs_path.display()))
-        .arg(format!("{}/", mount_point.display()))
-        .output();
+        // Copy rootfs contents (cp -a preserves permissions/symlinks/devices)
+        let cp_output = Command::new("cp")
+            .arg("-a")
+            .arg(format!("{}/.", rootfs_path.display()))
+            .arg(format!("{}/", mount_point.display()))
+            .output()?;
 
-    if let Ok(output) = cp_result {
-        if !output.status.success() {
-            // _guard will unmount on drop (via the ? bail below)
-            std::fs::remove_file(image_path)?;
-            anyhow::bail!("cp failed: {}", String::from_utf8_lossy(&output.stderr));
+        if !cp_output.status.success() {
+            anyhow::bail!("cp failed: {}", String::from_utf8_lossy(&cp_output.stderr));
         }
-    }
 
-    // Inject binaries and modules
-    inject_binary(
-        &mount_point,
-        "chvm-init",
-        "chvm-init",
-        &[
-            "./bin/chvm-init",
-            "./target/x86_64-unknown-linux-musl/release/chvm-init",
-            "./target/x86_64-unknown-linux-musl/debug/chvm-init",
-            "./target/release/chvm-init",
-            "./target/debug/chvm-init",
-            "/usr/local/bin/chvm-init",
-        ],
-        Some(".chvm/bin/chvm-init"),
-    );
-
-    inject_kernel_modules(&mount_point);
-
-    if inject_mycelium {
+        // Inject binaries and modules
         inject_binary(
             &mount_point,
-            "usr/bin/mycelium",
-            "mycelium",
+            "chvm-init",
+            "chvm-init",
             &[
-                "./bin/mycelium",
-                "/usr/local/bin/mycelium",
-                "/usr/bin/mycelium",
+                "./bin/chvm-init",
+                "./target/x86_64-unknown-linux-musl/release/chvm-init",
+                "./target/x86_64-unknown-linux-musl/debug/chvm-init",
+                "./target/release/chvm-init",
+                "./target/debug/chvm-init",
+                "/usr/local/bin/chvm-init",
             ],
-            Some(".chvm/bin/mycelium"),
+            Some(".chvm/bin/chvm-init"),
         );
+
+        inject_kernel_modules(&mount_point);
+
+        if inject_mycelium {
+            inject_binary(
+                &mount_point,
+                "usr/bin/mycelium",
+                "mycelium",
+                &[
+                    "./bin/mycelium",
+                    "/usr/local/bin/mycelium",
+                    "/usr/bin/mycelium",
+                ],
+                Some(".chvm/bin/mycelium"),
+            );
+        }
+
+        Ok(())
+    })();
+
+    if let Err(e) = build_result {
+        let _ = std::fs::remove_file(image_path);
+        return Err(e);
     }
 
     // _guard handles umount + cleanup on drop

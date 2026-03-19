@@ -47,7 +47,11 @@ pub fn load_config() -> InitConfig {
         }
 
         if let Some(workdir) = part.strip_prefix("chvm.workdir=") {
-            config.working_dir = workdir.to_string();
+            config.working_dir = base64::engine::general_purpose::STANDARD
+                .decode(workdir)
+                .ok()
+                .and_then(|decoded| String::from_utf8(decoded).ok())
+                .unwrap_or_else(|| workdir.to_string());
         }
     }
 

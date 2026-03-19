@@ -76,7 +76,7 @@ impl StorageBackend for VirtioFsStorage {
             }
         };
 
-        let child = match Command::new(&virtiofsd_bin)
+        let mut child = match Command::new(&virtiofsd_bin)
             .args([
                 &format!("--socket-path={}", socket_path.display()),
                 &format!("--shared-dir={}", merged_dir.display()),
@@ -99,19 +99,28 @@ impl StorageBackend for VirtioFsStorage {
         // Wait for socket (use tokio::time::sleep to avoid blocking the async runtime)
         for _ in 0..50 {
             if socket_path.exists() {
-                break;
+                info!(pid = pid, socket = %socket_path.display(), "virtiofsd started");
+                return Ok(StorageResult {
+                    block_device: None,
+                    socket_path: Some(socket_path.to_string_lossy().to_string()),
+                    virtiofs_pid: Some(pid),
+                    overlay_dir: Some(overlay_dir.to_string_lossy().to_string()),
+                });
+            }
+            if let Some(status) = child.try_wait()? {
+                let _ = Command::new("umount").arg(&merged_dir).output();
+                anyhow::bail!("virtiofsd exited before socket became ready: {status}");
             }
             tokio::time::sleep(std::time::Duration::from_millis(100)).await;
         }
 
-        info!(pid = pid, socket = %socket_path.display(), "virtiofsd started");
-
-        Ok(StorageResult {
-            block_device: None,
-            socket_path: Some(socket_path.to_string_lossy().to_string()),
-            virtiofs_pid: Some(pid),
-            overlay_dir: Some(overlay_dir.to_string_lossy().to_string()),
-        })
+        let _ = child.kill();
+        let _ = child.wait();
+        let _ = Command::new("umount").arg(&merged_dir).output();
+        anyhow::bail!(
+            "virtiofsd socket did not become ready: {}",
+            socket_path.display()
+        )
     }
 
     async fn cleanup(&self, _vm_id: &str) -> anyhow::Result<()> {

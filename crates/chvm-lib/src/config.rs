@@ -134,11 +134,13 @@ mod tests {
         let temp_dir = TempDir::new().unwrap();
         let config_path = temp_dir.path().join("config.json");
 
-        let mut config = Config::default();
-        config.default_vcpu = 4;
-        config.default_memory_mb = 2048;
-        config.kernel_path = Some("/custom/kernel".to_string());
-        config.default_bridge = "mybr0".to_string();
+        let config = Config {
+            default_vcpu: 4,
+            default_memory_mb: 2048,
+            kernel_path: Some("/custom/kernel".to_string()),
+            default_bridge: "mybr0".to_string(),
+            ..Config::default()
+        };
 
         config.save(&config_path).unwrap();
         assert!(config_path.exists());

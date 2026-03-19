@@ -334,7 +334,7 @@ mod tests {
         used_with_gateway.insert(1);
 
         let ip = find_unused_ip("nonexistent-bridge");
-        assert!(ip >= 2 && ip < 255);
+        assert!((2..255).contains(&ip));
     }
 
     #[test]

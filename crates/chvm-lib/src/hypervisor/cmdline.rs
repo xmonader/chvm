@@ -59,7 +59,8 @@ impl KernelCmdlineBuilder {
 
     pub fn workdir(mut self, dir: &str) -> Self {
         if !dir.is_empty() {
-            self.parts.push(format!("chvm.workdir={dir}"));
+            let encoded = base64::engine::general_purpose::STANDARD.encode(dir.as_bytes());
+            self.parts.push(format!("chvm.workdir={encoded}"));
         }
         self
     }
@@ -128,13 +129,21 @@ mod tests {
     #[test]
     fn test_workdir() {
         let cmdline = KernelCmdlineBuilder::new().workdir("/app").build();
-        assert_eq!(cmdline, "chvm.workdir=/app");
+        assert_eq!(cmdline, "chvm.workdir=L2FwcA==");
     }
 
     #[test]
     fn test_workdir_empty() {
         let cmdline = KernelCmdlineBuilder::new().workdir("").build();
         assert_eq!(cmdline, "");
+    }
+
+    #[test]
+    fn test_workdir_encoding_preserves_spaces() {
+        let cmdline = KernelCmdlineBuilder::new()
+            .workdir("/app with spaces")
+            .build();
+        assert_eq!(cmdline, "chvm.workdir=L2FwcCB3aXRoIHNwYWNlcw==");
     }
 
     #[test]
@@ -170,7 +179,7 @@ mod tests {
         assert!(cmdline.contains("init=/chvm-init"));
         assert!(cmdline.contains("chvm.cmd="));
         assert!(cmdline.contains("chvm.env="));
-        assert!(cmdline.contains("chvm.workdir=/app"));
+        assert!(cmdline.contains("chvm.workdir=L2FwcA=="));
         assert!(cmdline.contains("quiet"));
     }
 

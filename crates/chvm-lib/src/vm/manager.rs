@@ -357,10 +357,19 @@ impl VmManager {
         }
 
         // Prepare virtiofs for volume mounts
-        self.prepare_volume_mounts(&mut state, &vm_dir).await?;
+        if let Err(e) = self.prepare_volume_mounts(&mut state, &vm_dir).await {
+            self.cleanup_failed_start(&state, &vm_dir).await;
+            return Err(e);
+        }
 
         // Launch Cloud Hypervisor process
-        let pid = hypervisor::process::launch(&state.vm_config, &vm_dir).await?;
+        let pid = match hypervisor::process::launch(&state.vm_config, &vm_dir).await {
+            Ok(pid) => pid,
+            Err(e) => {
+                self.cleanup_failed_start(&state, &vm_dir).await;
+                return Err(e);
+            }
+        };
 
         state.status = VmState::Running;
         state.started_at = Some(Utc::now());
@@ -1032,6 +1041,16 @@ impl VmManager {
                 }
             }
         }
+    }
+
+    async fn cleanup_failed_start(&self, state: &RuntimeState, vm_dir: &Path) {
+        if state.network_state.is_some() {
+            if let Err(e) = self.teardown_network(state).await {
+                warn!(vm_id = %state.id, error = %e, "Failed to teardown network after start failure");
+            }
+        }
+        self.cleanup_storage(state);
+        self.cleanup_runtime_artifacts(vm_dir);
     }
 
     fn cleanup_runtime_artifacts(&self, vm_dir: &Path) {

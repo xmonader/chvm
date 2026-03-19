@@ -1,5 +1,5 @@
 use std::fs;
-use std::path::Path;
+use std::path::{Component, Path, PathBuf};
 
 use flate2::read::GzDecoder;
 use tar::Archive;
@@ -64,6 +64,11 @@ fn extract_layer(layer_path: &str, dest_dir: &Path) -> anyhow::Result<()> {
             Err(_) => continue,
         };
 
+        let Some(path) = sanitize_archive_path(&path) else {
+            warn!(path = %path.display(), "Skipping unsafe tar entry path");
+            continue;
+        };
+
         let path_str = path.to_string_lossy();
 
         // Handle OCI whiteout files
@@ -74,7 +79,7 @@ fn extract_layer(layer_path: &str, dest_dir: &Path) -> anyhow::Result<()> {
                     let full_parent = dest_dir.join(parent);
                     if full_parent.exists() {
                         for child in fs::read_dir(&full_parent)?.flatten() {
-                            if let Err(e) = fs::remove_dir_all(child.path()) {
+                            if let Err(e) = remove_path(&child.path()) {
                                 warn!(path = %child.path().display(), error = %e, "Failed to remove entry during opaque whiteout");
                             }
                         }
@@ -87,28 +92,88 @@ fn extract_layer(layer_path: &str, dest_dir: &Path) -> anyhow::Result<()> {
                 // Regular whiteout: delete the specific file
                 if let Some(parent) = path.parent() {
                     let target = dest_dir.join(parent).join(stripped);
-                    // Target could be a file or directory; try both, warn if neither succeeds
-                    let file_result = fs::remove_file(&target);
-                    let dir_result = fs::remove_dir_all(&target);
-                    if file_result.is_err() && dir_result.is_err() && target.exists() {
-                        warn!(path = %target.display(), "Failed to apply whiteout: could not remove target");
+                    if let Err(e) = remove_path_if_exists(&target) {
+                        warn!(path = %target.display(), error = %e, "Failed to apply whiteout");
                     }
                 }
                 continue;
             }
         }
 
-        // Skip problematic paths
-        if path_str.contains("..") {
-            continue;
-        }
-
         // Extract normally
-        let full_path = dest_dir.join(&path);
-        if let Err(e) = entry.unpack(&full_path) {
-            debug!(path = %path_str, error = %e, "Failed to extract entry (non-fatal)");
+        match entry.unpack_in(dest_dir) {
+            Ok(true) => {}
+            Ok(false) => warn!(path = %path_str, "Skipping tar entry outside destination"),
+            Err(e) => debug!(path = %path_str, error = %e, "Failed to extract entry (non-fatal)"),
         }
     }
 
     Ok(())
+}
+
+fn sanitize_archive_path(path: &Path) -> Option<PathBuf> {
+    let mut sanitized = PathBuf::new();
+    for component in path.components() {
+        match component {
+            Component::Normal(part) => sanitized.push(part),
+            Component::CurDir => {}
+            Component::Prefix(_) | Component::RootDir | Component::ParentDir => return None,
+        }
+    }
+    Some(sanitized)
+}
+
+fn remove_path(path: &Path) -> std::io::Result<()> {
+    match fs::symlink_metadata(path) {
+        Ok(meta) if meta.is_dir() => fs::remove_dir_all(path),
+        Ok(_) => fs::remove_file(path),
+        Err(e) => Err(e),
+    }
+}
+
+fn remove_path_if_exists(path: &Path) -> std::io::Result<()> {
+    match remove_path(path) {
+        Ok(()) => Ok(()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(e) => Err(e),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn sanitize_archive_path_rejects_parent_components() {
+        assert!(sanitize_archive_path(Path::new("../etc/passwd")).is_none());
+        assert!(sanitize_archive_path(Path::new("root/../../etc/passwd")).is_none());
+    }
+
+    #[test]
+    fn sanitize_archive_path_rejects_absolute_paths() {
+        assert!(sanitize_archive_path(Path::new("/etc/passwd")).is_none());
+    }
+
+    #[test]
+    fn sanitize_archive_path_keeps_safe_relative_path() {
+        assert_eq!(
+            sanitize_archive_path(Path::new("./usr/bin/sh")),
+            Some(PathBuf::from("usr/bin/sh"))
+        );
+    }
+
+    #[test]
+    fn remove_path_removes_files_and_directories() {
+        let tmp = tempfile::tempdir().unwrap();
+        let file = tmp.path().join("file");
+        let dir = tmp.path().join("dir");
+        std::fs::write(&file, b"data").unwrap();
+        std::fs::create_dir_all(&dir).unwrap();
+
+        remove_path(&file).unwrap();
+        remove_path(&dir).unwrap();
+
+        assert!(!file.exists());
+        assert!(!dir.exists());
+    }
 }

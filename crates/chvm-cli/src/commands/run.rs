@@ -10,7 +10,12 @@ pub async fn execute(manager: &mut VmManager, args: &RunArgs) -> anyhow::Result<
     println!("{}", state.id);
 
     // Start VM
-    manager.start(&state.id).await?;
+    if let Err(e) = manager.start(&state.id).await {
+        if let Err(remove_err) = manager.remove(&state.id, true).await {
+            eprintln!("Warning: Failed to clean up VM after start failure: {remove_err}");
+        }
+        return Err(e.into());
+    }
 
     if args.detach {
         println!("Container {} started in background", state.name);

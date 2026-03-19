@@ -155,6 +155,10 @@ pub fn build_create_options(
 
     let registry = registry_from_image_ref(args.image());
     let credentials = resolve_credentials(&registry);
+    let network_mode = args
+        .network()
+        .parse::<NetworkMode>()
+        .map_err(|e| anyhow::anyhow!("invalid network mode '{}': {e}", args.network()))?;
 
     Ok(CreateOptions {
         name: args.name(),
@@ -167,7 +171,7 @@ pub fn build_create_options(
         vcpu: Some(args.cpus()),
         memory_mb: Some(args.memory()),
         storage_backend: Some(args.storage().to_string()),
-        network_mode: Some(args.network().parse::<NetworkMode>().unwrap_or_default()),
+        network_mode: Some(network_mode),
         port_forwards,
         env: args.env().to_vec(),
         cmd: args.cmd().to_vec(),
