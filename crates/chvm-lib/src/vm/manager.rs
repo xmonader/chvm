@@ -330,6 +330,7 @@ impl VmManager {
 
         let vm_dir = self.paths.vm_dir(&state.id);
         std::fs::create_dir_all(&vm_dir)?;
+        self.cleanup_runtime_artifacts(&vm_dir);
 
         // Prepare storage
         let storage_result = self.prepare_storage(&state, &vm_dir).await?;
@@ -412,9 +413,9 @@ impl VmManager {
             }
         }
 
-        // Remove stale API socket so a subsequent start doesn't get EADDRINUSE
+        // Remove stale runtime sockets so a subsequent start doesn't get EADDRINUSE
         let vm_dir = self.paths.vm_dir(&state.id);
-        let _ = std::fs::remove_file(vm_dir.join("api.sock"));
+        self.cleanup_runtime_artifacts(&vm_dir);
 
         // Cleanup storage (virtiofsd processes, overlays)
         self.cleanup_storage(&state);
@@ -512,8 +513,10 @@ impl VmManager {
     }
 
     /// Retrieve runtime counters (network, block, etc.) for a running VM.
-    pub async fn stats(&self, id_or_name: &str) -> Result<(RuntimeState, serde_json::Value)> {
-        let state = self.state_store.resolve(id_or_name)?;
+    pub async fn stats(&mut self, id_or_name: &str) -> Result<(RuntimeState, serde_json::Value)> {
+        self.refresh_status().await?;
+
+        let state = self.state_store.resolve_clone(id_or_name)?;
         if state.status != VmState::Running {
             return Err(ChvmError::VmNotRunning);
         }
@@ -523,7 +526,14 @@ impl VmManager {
             .api_socket_path()
             .ok_or_else(|| ChvmError::ApiError("no state dir for API socket".into()))?;
 
-        let counters = crate::hypervisor::api::vm_counters(&socket_path).await?;
+        let counters = match crate::hypervisor::api::vm_counters(&socket_path).await {
+            Ok(counters) => counters,
+            Err(_) if !process_running(state.vmm_pid) => {
+                self.refresh_status().await?;
+                return Err(ChvmError::VmNotRunning);
+            }
+            Err(err) => return Err(err),
+        };
         Ok((state.clone(), counters))
     }
 
@@ -549,6 +559,7 @@ impl VmManager {
                 }
 
                 self.cleanup_storage(&state);
+                self.cleanup_runtime_artifacts(&self.paths.vm_dir(&id));
 
                 let mut updated = state;
                 updated.status = VmState::Stopped;
@@ -721,8 +732,7 @@ impl VmManager {
             .port_forwards(opts.port_forwards.clone())
             .mounts(opts.mounts.clone())
             .mycelium_peers({
-                let effective_mode = opts.network_mode.unwrap_or_default();
-                if effective_mode == NetworkMode::Mycelium && opts.mycelium_peers.is_empty() {
+                if net_mode == NetworkMode::Mycelium && opts.mycelium_peers.is_empty() {
                     resolve_default_peers(&self.config.default_mycelium_peers)
                 } else {
                     opts.mycelium_peers.clone()
@@ -1013,12 +1023,23 @@ impl VmManager {
         // Kill virtiofsd processes and unmount overlays
         if let Some(ref ss) = state.storage_state {
             if let Some(pid) = ss.virtiofs_pid {
-                kill_process(pid);
+                kill_child_process(pid);
             }
             if let Some(ref overlay) = ss.overlay_dir {
                 let merged = Path::new(overlay).join("merged");
                 if let Err(e) = nix::mount::umount2(&merged, nix::mount::MntFlags::MNT_DETACH) {
                     warn!(path = %merged.display(), error = %e, "Failed to unmount overlay during cleanup");
+                }
+            }
+        }
+    }
+
+    fn cleanup_runtime_artifacts(&self, vm_dir: &Path) {
+        for socket_name in ["api.sock", "vsock.sock"] {
+            let socket_path = vm_dir.join(socket_name);
+            if let Err(e) = std::fs::remove_file(&socket_path) {
+                if e.kind() != std::io::ErrorKind::NotFound {
+                    warn!(path = %socket_path.display(), error = %e, "Failed to remove stale socket");
                 }
             }
         }
@@ -1110,6 +1131,16 @@ fn kill_process(pid: i32) {
     );
 }
 
+fn kill_child_process(pid: i32) {
+    if pid <= 0 {
+        return;
+    }
+    let _ = nix::sys::signal::kill(
+        nix::unistd::Pid::from_raw(pid),
+        nix::sys::signal::Signal::SIGKILL,
+    );
+}
+
 async fn wait_for_exit(pid: i32, timeout: std::time::Duration) {
     let deadline = tokio::time::Instant::now() + timeout;
     loop {
@@ -1127,6 +1158,8 @@ async fn wait_for_exit(pid: i32, timeout: std::time::Duration) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::Config;
+    use crate::paths::Paths;
 
     fn make_state(id: &str, name: &str) -> RuntimeState {
         RuntimeState {
@@ -1235,5 +1268,61 @@ mod tests {
         // "a1b" should resolve to VM2 (exact name match) not VM1 (prefix match)
         let state = store.resolve("a1b").unwrap();
         assert_eq!(state.id, "ffffff000000");
+    }
+
+    #[test]
+    fn cleanup_runtime_artifacts_removes_stale_sockets() {
+        let tmp = tempfile::tempdir().unwrap();
+        let paths = Paths::new(tmp.path().join("chvm"));
+        let manager = VmManager::new(Config::default(), paths).unwrap();
+        let vm_dir = tmp.path().join("vm");
+        std::fs::create_dir_all(&vm_dir).unwrap();
+        std::fs::write(vm_dir.join("api.sock"), b"stale").unwrap();
+        std::fs::write(vm_dir.join("vsock.sock"), b"stale").unwrap();
+
+        manager.cleanup_runtime_artifacts(&vm_dir);
+
+        assert!(!vm_dir.join("api.sock").exists());
+        assert!(!vm_dir.join("vsock.sock").exists());
+    }
+
+    #[test]
+    fn build_vm_config_uses_default_mycelium_peers_for_default_network_mode() {
+        let tmp = tempfile::tempdir().unwrap();
+        let paths = Paths::new(tmp.path().join("chvm"));
+        let manager = VmManager::new(Config::default(), paths).unwrap();
+        let vm_dir = tmp.path().join("vm");
+        let kernel_path = tmp.path().join("vmlinux");
+        std::fs::create_dir_all(&vm_dir).unwrap();
+        std::fs::write(&kernel_path, b"kernel").unwrap();
+
+        let opts = CreateOptions {
+            name: Some("vm".into()),
+            image_ref: Some("alpine:latest".into()),
+            rootfs_path: None,
+            vcpu: None,
+            memory_mb: None,
+            storage_backend: None,
+            network_mode: None,
+            port_forwards: vec![],
+            env: vec![],
+            cmd: vec![],
+            mounts: vec![],
+            kernel_path: Some(kernel_path.to_string_lossy().to_string()),
+            detach: false,
+            remove_after: false,
+            mycelium_peers: vec![],
+            credentials: None,
+        };
+
+        let vm_config = manager
+            .build_vm_config("a1b2c3d4e5f6", "vm", &opts, "/rootfs".into(), None, &vm_dir)
+            .unwrap();
+
+        assert_eq!(vm_config.network.mode, NetworkMode::Mycelium);
+        assert_eq!(
+            vm_config.network.mycelium_peers,
+            resolve_default_peers(&manager.config.default_mycelium_peers)
+        );
     }
 }

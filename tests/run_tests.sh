@@ -87,6 +87,9 @@ for suite in "$SCRIPT_DIR"/[0-9]*.sh "$SCRIPT_DIR"/[0-9]*.expect; do
         TOTAL_FAIL=$((TOTAL_FAIL + f))
         TOTAL_SKIP=$((TOTAL_SKIP + s))
         SUITE_RESULTS+=("$suite_name: ${GREEN}$p pass${NC} ${RED}$f fail${NC} ${YELLOW}$s skip${NC}")
+    elif [ "$suite_rc" -ne 0 ]; then
+        TOTAL_FAIL=$((TOTAL_FAIL + 1))
+        SUITE_RESULTS+=("$suite_name: ${GREEN}0 pass${NC} ${RED}1 fail${NC} ${YELLOW}0 skip${NC}")
     fi
     rm -f "$results_file"
     echo ""

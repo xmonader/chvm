@@ -17,7 +17,7 @@ fn format_bytes(bytes: u64) -> String {
     }
 }
 
-pub async fn execute(manager: &VmManager, args: &StatsArgs) -> anyhow::Result<()> {
+pub async fn execute(manager: &mut VmManager, args: &StatsArgs) -> anyhow::Result<()> {
     let (state, counters) = manager.stats(&args.container).await?;
 
     let short_id = &state.vm_config.id[..12.min(state.vm_config.id.len())];

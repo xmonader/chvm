@@ -165,17 +165,28 @@ async fn gc_cleanup() -> anyhow::Result<()> {
         println!("No crashed VMs found");
     }
 
-    // Level 2: Detect orphaned TAP devices and iptables rules
+    // Level 2: Only remove resources we can tie to CHVM state on disk.
     let running_prefixes: HashSet<String> = running_after
         .iter()
         .map(|id| id[..std::cmp::min(ID_PREFIX_LEN, id.len())].to_string())
         .collect();
 
-    // Collect IPs of running VMs for iptables orphan detection
-    let running_ips: HashSet<String> = manager
+    let stale_tap_devices: HashSet<String> = manager
         .list()
         .iter()
-        .filter(|s| s.status == VmState::Running)
+        .filter(|s| s.status != VmState::Running)
+        .filter_map(|s| {
+            s.network_state
+                .as_ref()
+                .and_then(|ns| ns.tap_device.as_ref())
+                .cloned()
+        })
+        .collect();
+
+    let stale_ips: HashSet<String> = manager
+        .list()
+        .iter()
+        .filter(|s| s.status != VmState::Running)
         .filter_map(|s| {
             s.network_state
                 .as_ref()
@@ -184,13 +195,16 @@ async fn gc_cleanup() -> anyhow::Result<()> {
         })
         .collect();
 
-    gc_orphaned_tap_devices(&running_prefixes);
-    gc_orphaned_iptables_rules(&running_ips);
+    gc_orphaned_tap_devices(&running_prefixes, &stale_tap_devices);
+    gc_orphaned_iptables_rules(&stale_ips);
 
     Ok(())
 }
 
-fn gc_orphaned_tap_devices(running_prefixes: &HashSet<String>) {
+fn gc_orphaned_tap_devices(
+    running_prefixes: &HashSet<String>,
+    stale_tap_devices: &HashSet<String>,
+) {
     let output = match Command::new("ip").args(["-o", "link", "show"]).output() {
         Ok(out) => out,
         Err(e) => {
@@ -203,19 +217,17 @@ fn gc_orphaned_tap_devices(running_prefixes: &HashSet<String>) {
     let mut orphaned = Vec::new();
 
     for line in stdout.lines() {
-        let parts: Vec<&str> = line.split_whitespace().collect();
-        // Look for interfaces named like "tap-XXXXXXXX" where XXXXXXXX is a VM prefix
-        if parts.len() >= 2 {
-            let dev = parts[1] // get the interface name (e.g. "2: tap-abcdef12@...")
-                .trim_end_matches(':')
-                .split('@')
-                .next()
-                .unwrap_or("");
-            if let Some(prefix) = dev.strip_prefix("tap-") {
-                if !running_prefixes.contains(prefix) {
-                    orphaned.push(dev.to_string());
-                }
-            }
+        let Some(dev) = extract_link_device_name(line) else {
+            continue;
+        };
+        let Some(prefix) = dev.strip_prefix("tap-") else {
+            continue;
+        };
+        if running_prefixes.contains(prefix) {
+            continue;
+        }
+        if stale_tap_devices.contains(dev) {
+            orphaned.push(dev.to_string());
         }
     }
 
@@ -233,7 +245,7 @@ fn gc_orphaned_tap_devices(running_prefixes: &HashSet<String>) {
     }
 }
 
-fn gc_orphaned_iptables_rules(running_ips: &HashSet<String>) {
+fn gc_orphaned_iptables_rules(stale_ips: &HashSet<String>) {
     let output = match Command::new("iptables").args(["-t", "nat", "-S"]).output() {
         Ok(out) => out,
         Err(e) => {
@@ -259,10 +271,8 @@ fn gc_orphaned_iptables_rules(running_ips: &HashSet<String>) {
 
         // Extract the per-VM IP from the rule (e.g. 192.168.200.2)
         let ip = extract_chvm_ip(line);
-        if let Some(ref ip) = ip {
-            if running_ips.contains(ip) {
-                continue; // belongs to a running VM
-            }
+        if !ip.as_ref().is_some_and(|ip| stale_ips.contains(ip)) {
+            continue;
         }
 
         let delete_rule = line.replacen("-A ", "-D ", 1).replacen("-I ", "-D ", 1);
@@ -290,6 +300,20 @@ fn gc_orphaned_iptables_rules(running_ips: &HashSet<String>) {
     } else {
         println!("No orphaned iptables rules found");
     }
+}
+
+fn extract_link_device_name(line: &str) -> Option<&str> {
+    let parts: Vec<&str> = line.split_whitespace().collect();
+    if parts.len() < 2 {
+        return None;
+    }
+    Some(
+        parts[1]
+            .trim_end_matches(':')
+            .split('@')
+            .next()
+            .unwrap_or(""),
+    )
 }
 
 /// Extract a chvm-subnet IP (192.168.200.X) from an iptables rule line.
@@ -362,5 +386,17 @@ mod tests {
     fn test_extract_chvm_ip_no_port_in_destination() {
         let line = "-A PREROUTING -p udp --dport 53 -j DNAT --to-destination 192.168.200.7";
         assert_eq!(extract_chvm_ip(line), Some("192.168.200.7".to_string()));
+    }
+
+    #[test]
+    fn test_extract_link_device_name_plain() {
+        let line = "2: tap-deadbeef: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1500";
+        assert_eq!(extract_link_device_name(line), Some("tap-deadbeef"));
+    }
+
+    #[test]
+    fn test_extract_link_device_name_with_peer_suffix() {
+        let line = "2: tap-deadbeef@if3: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1500";
+        assert_eq!(extract_link_device_name(line), Some("tap-deadbeef"));
     }
 }

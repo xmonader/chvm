@@ -40,9 +40,6 @@ test_end() {
     echo -e "${BOLD}--- Suite Results ---${NC}"
     echo -e "  ${GREEN}PASS: $PASS${NC}  ${RED}FAIL: $FAIL${NC}  ${YELLOW}SKIP: $SKIP${NC}"
     echo ""
-    if [ "$FAIL" -gt 0 ]; then
-        return 1
-    fi
     return 0
 }
 
@@ -188,4 +185,8 @@ export_results() {
     if [ -n "$results_file" ]; then
         echo "$PASS $FAIL $SKIP" > "$results_file"
     fi
+    if [ "$FAIL" -gt 0 ]; then
+        return 1
+    fi
+    return 0
 }
