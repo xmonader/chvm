@@ -227,7 +227,17 @@ impl ImageCache {
 
         let digest = sanitize_digest(&cached.digest);
         let rootfs = self.ensure_rootfs(cached)?;
-        let prepared_dir = self.cache_dir.join(&digest).join(&variant);
+        let digest_dir = self.cache_dir.join(&digest);
+        std::fs::create_dir_all(&digest_dir)?;
+        let prepared_dir = digest_dir.join(&variant);
+        let prepare_lock_path = digest_dir.join(format!("{variant}.lock"));
+        let _prepare_lock = FileLock::exclusive(&prepare_lock_path)?;
+
+        if prepared_dir.exists() {
+            self.record_prepared_rootfs_path(&digest, &variant, &prepared_dir)?;
+            return Ok(prepared_dir.to_string_lossy().to_string());
+        }
+
         let temp_dir = self
             .cache_dir
             .join(&digest)
@@ -243,22 +253,29 @@ impl ImageCache {
         })?;
         inject_runtime_binaries(&temp_dir, inject_mycelium);
 
-        if prepared_dir.exists() {
-            let _ = std::fs::remove_dir_all(&prepared_dir);
-        }
         std::fs::rename(&temp_dir, &prepared_dir)?;
+        self.record_prepared_rootfs_path(&digest, &variant, &prepared_dir)?;
+
+        Ok(prepared_dir.to_string_lossy().to_string())
+    }
+
+    fn record_prepared_rootfs_path(
+        &mut self,
+        digest: &str,
+        variant: &str,
+        prepared_dir: &Path,
+    ) -> Result<()> {
 
         let _lock = FileLock::exclusive(&self.index_path())?;
         self.reload_index()?;
 
-        if let Some(img) = self.index.images.get_mut(&digest) {
+        if let Some(img) = self.index.images.get_mut(digest) {
             img.prepared_rootfs_paths
-                .insert(variant.clone(), prepared_dir.to_string_lossy().to_string());
+                .insert(variant.to_string(), prepared_dir.to_string_lossy().to_string());
             img.last_used_at = Utc::now();
         }
         self.save_index()?;
-
-        Ok(prepared_dir.to_string_lossy().to_string())
+        Ok(())
     }
 
     pub fn cache_dir(&self) -> &Path {
