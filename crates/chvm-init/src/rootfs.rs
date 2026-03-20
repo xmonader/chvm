@@ -82,7 +82,13 @@ pub fn mount_rootfs() -> Result<(), Box<dyn std::error::Error>> {
         root.source, fstype, new_root
     );
 
-    mount(Some(root.source.as_str()), new_root, Some(fstype), MsFlags::empty(), None::<&str>)?;
+    mount(
+        Some(root.source.as_str()),
+        new_root,
+        Some(fstype),
+        MsFlags::empty(),
+        None::<&str>,
+    )?;
 
     // Verify mount
     let sh_path = format!("{new_root}/bin/sh");

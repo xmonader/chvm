@@ -44,7 +44,11 @@ pub fn build_args(config: &VmConfig, vm_dir: &Path) -> Vec<String> {
             fs_entries.push(format!("tag=rootfs,socket={}", config.rootfs.source));
         }
         RootfsType::VirtioBlock => {
-            push_arg(&mut args, "--disk", format!("path={}", config.rootfs.source));
+            push_arg(
+                &mut args,
+                "--disk",
+                format!("path={}", config.rootfs.source),
+            );
         }
     }
 
@@ -172,9 +176,7 @@ pub fn find_ch_binary() -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::vm::state::{
-        InitConfig, KernelConfig, MountConfig, NetworkConfig, RootfsConfig,
-    };
+    use crate::vm::state::{InitConfig, KernelConfig, MountConfig, NetworkConfig, RootfsConfig};
 
     fn sample_vm_config(rootfs_type: RootfsType, mounts: Vec<MountConfig>) -> VmConfig {
         VmConfig {

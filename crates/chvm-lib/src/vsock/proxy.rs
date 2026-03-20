@@ -10,22 +10,28 @@ const VSOCK_HANDSHAKE_TIMEOUT: std::time::Duration = std::time::Duration::from_s
 /// Connect to a VM's vsock via the CH UDS proxy.
 /// Sends "CONNECT <port>\n", expects "OK\n", then returns the stream.
 async fn connect_vsock(socket_path: &str, port: u32) -> Result<UnixStream> {
-    let mut stream = tokio::time::timeout(VSOCK_HANDSHAKE_TIMEOUT, UnixStream::connect(socket_path))
-        .await
-        .map_err(|_| {
-            ChvmError::VsockError(format!(
-                "timed out connecting to vsock proxy {}",
-                socket_path
-            ))
-        })?
-        .map_err(|e| ChvmError::VsockError(format!("failed to connect to {}: {e}", socket_path)))?;
+    let mut stream =
+        tokio::time::timeout(VSOCK_HANDSHAKE_TIMEOUT, UnixStream::connect(socket_path))
+            .await
+            .map_err(|_| {
+                ChvmError::VsockError(format!(
+                    "timed out connecting to vsock proxy {}",
+                    socket_path
+                ))
+            })?
+            .map_err(|e| {
+                ChvmError::VsockError(format!("failed to connect to {}: {e}", socket_path))
+            })?;
 
     // Send CONNECT command
     let connect_cmd = format!("CONNECT {port}\n");
-    tokio::time::timeout(VSOCK_HANDSHAKE_TIMEOUT, stream.write_all(connect_cmd.as_bytes()))
-        .await
-        .map_err(|_| ChvmError::VsockError("timed out sending CONNECT to vsock proxy".into()))?
-        .map_err(|e| ChvmError::VsockError(format!("failed to send CONNECT: {e}")))?;
+    tokio::time::timeout(
+        VSOCK_HANDSHAKE_TIMEOUT,
+        stream.write_all(connect_cmd.as_bytes()),
+    )
+    .await
+    .map_err(|_| ChvmError::VsockError("timed out sending CONNECT to vsock proxy".into()))?
+    .map_err(|e| ChvmError::VsockError(format!("failed to send CONNECT: {e}")))?;
 
     // Read OK response
     let mut buf = vec![0u8; 256];
