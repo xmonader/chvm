@@ -30,7 +30,7 @@ pub trait CommonVmArgs {
     fn rootfs(&self) -> Option<String>;
     fn cpus(&self) -> u32;
     fn memory(&self) -> u32;
-    fn storage(&self) -> &str;
+    fn storage(&self) -> Option<&str>;
     fn network(&self) -> &str;
     fn publish(&self) -> &[String];
     fn env(&self) -> &[String];
@@ -56,8 +56,8 @@ impl CommonVmArgs for crate::cli::RunArgs {
     fn memory(&self) -> u32 {
         self.memory
     }
-    fn storage(&self) -> &str {
-        &self.storage
+    fn storage(&self) -> Option<&str> {
+        self.storage.as_deref()
     }
     fn network(&self) -> &str {
         &self.network
@@ -98,8 +98,8 @@ impl CommonVmArgs for crate::cli::CreateArgs {
     fn memory(&self) -> u32 {
         self.memory
     }
-    fn storage(&self) -> &str {
-        &self.storage
+    fn storage(&self) -> Option<&str> {
+        self.storage.as_deref()
     }
     fn network(&self) -> &str {
         &self.network
@@ -160,13 +160,14 @@ pub fn build_create_options(
         .parse::<NetworkMode>()
         .map_err(|e| anyhow::anyhow!("invalid network mode '{}': {e}", args.network()))?;
     let storage_backend = match args.storage() {
-        "auto" | "block" | "virtiofs" => args.storage().to_string(),
-        other => {
+        Some("block" | "virtiofs") => args.storage().map(str::to_string),
+        Some(other) => {
             return Err(anyhow::anyhow!(
-                "invalid storage backend '{}': expected auto, block, or virtiofs",
+                "invalid storage backend '{}': expected block or virtiofs",
                 other
             ));
         }
+        None => None,
     };
 
     Ok(CreateOptions {
@@ -179,7 +180,7 @@ pub fn build_create_options(
         rootfs_path: args.rootfs(),
         vcpu: Some(args.cpus()),
         memory_mb: Some(args.memory()),
-        storage_backend: Some(storage_backend),
+        storage_backend,
         network_mode: Some(network_mode),
         port_forwards,
         env: args.env().to_vec(),
@@ -191,4 +192,71 @@ pub fn build_create_options(
         mycelium_peers: args.mycelium_peers().to_vec(),
         credentials: Some(credentials),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    struct FakeArgs {
+        storage: Option<String>,
+    }
+
+    impl CommonVmArgs for FakeArgs {
+        fn name(&self) -> Option<String> {
+            Some("test-vm".to_string())
+        }
+        fn image(&self) -> &str {
+            "ubuntu:24.04"
+        }
+        fn rootfs(&self) -> Option<String> {
+            None
+        }
+        fn cpus(&self) -> u32 {
+            1
+        }
+        fn memory(&self) -> u32 {
+            512
+        }
+        fn storage(&self) -> Option<&str> {
+            self.storage.as_deref()
+        }
+        fn network(&self) -> &str {
+            "mycelium"
+        }
+        fn publish(&self) -> &[String] {
+            &[]
+        }
+        fn env(&self) -> &[String] {
+            &[]
+        }
+        fn volume(&self) -> &[String] {
+            &[]
+        }
+        fn kernel(&self) -> Option<String> {
+            None
+        }
+        fn mycelium_peers(&self) -> &[String] {
+            &[]
+        }
+        fn cmd(&self) -> &[String] {
+            &[]
+        }
+    }
+
+    #[test]
+    fn build_create_options_leaves_storage_unset_when_not_overridden() {
+        let args = FakeArgs { storage: None };
+        let opts = build_create_options(&args, false, false).unwrap();
+        assert_eq!(opts.storage_backend, None);
+    }
+
+    #[test]
+    fn build_create_options_preserves_storage_override() {
+        let args = FakeArgs {
+            storage: Some("block".to_string()),
+        };
+        let opts = build_create_options(&args, false, false).unwrap();
+        assert_eq!(opts.storage_backend.as_deref(), Some("block"));
+    }
 }

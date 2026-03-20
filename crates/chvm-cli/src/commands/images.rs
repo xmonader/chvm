@@ -1,8 +1,35 @@
-use crate::cli::ImagesArgs;
+use crate::cli::{ImageCommands, ImageRmArgs, ImagesArgs};
 use crate::commands::truncate;
 use chvm_lib::vm::VmManager;
 
-pub fn execute(manager: &VmManager, _args: &ImagesArgs) -> anyhow::Result<()> {
+pub fn execute(manager: &mut VmManager, args: &ImagesArgs) -> anyhow::Result<()> {
+    match &args.command {
+        Some(ImageCommands::Rm(args)) => execute_remove(manager, args),
+        None => execute_list(manager),
+    }
+}
+
+pub fn execute_remove(manager: &mut VmManager, args: &ImageRmArgs) -> anyhow::Result<()> {
+    let result = manager.remove_image(&args.image)?;
+
+    if result.deleted_image {
+        println!("Removed cached image {}", result.digest);
+    } else {
+        let removed_ref = result
+            .removed_refs
+            .first()
+            .map(String::as_str)
+            .unwrap_or(&args.image);
+        println!(
+            "Removed ref {} from cached digest {} ({} refs remain)",
+            removed_ref, result.digest, result.remaining_refs
+        );
+    }
+
+    Ok(())
+}
+
+fn execute_list(manager: &VmManager) -> anyhow::Result<()> {
     let images = manager.image_cache.list();
 
     println!(

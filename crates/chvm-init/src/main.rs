@@ -13,6 +13,11 @@ mod vsock_server;
 use std::process::Command;
 
 fn main() {
+    if version_requested() {
+        println!("chvm-init {}", env!("CHVM_FULL_VERSION"));
+        return;
+    }
+
     println!("[init] CHVM guest init starting...");
 
     // Set PATH early
@@ -123,6 +128,12 @@ fn main() {
             signal::poweroff(1);
         }
     }
+}
+
+fn version_requested() -> bool {
+    std::env::args()
+        .skip(1)
+        .any(|arg| arg == "--version" || arg == "-V")
 }
 
 fn load_kernel_modules() {

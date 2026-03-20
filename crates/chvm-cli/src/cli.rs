@@ -44,7 +44,11 @@ fn complete_vm(current: &std::ffi::OsStr) -> Vec<CompletionCandidate> {
 }
 
 #[derive(Parser)]
-#[command(name = "chvm", about = "Cloud Hypervisor MicroVM Manager", version)]
+#[command(
+    name = "chvm",
+    about = "Cloud Hypervisor MicroVM Manager",
+    version = env!("CHVM_FULL_VERSION")
+)]
 pub struct Cli {
     #[command(subcommand)]
     pub command: Commands,
@@ -96,6 +100,9 @@ pub enum Commands {
     /// List images
     Images(ImagesArgs),
 
+    /// Remove an image
+    Rmi(ImageRmArgs),
+
     /// Remove stopped containers
     Prune(PruneArgs),
 
@@ -138,9 +145,9 @@ pub struct RunArgs {
     #[arg(long, default_value = "512")]
     pub memory: u32,
 
-    /// Storage backend (auto, block, virtiofs)
-    #[arg(long, default_value = "auto")]
-    pub storage: String,
+    /// Storage backend override (block, virtiofs)
+    #[arg(long)]
+    pub storage: Option<String>,
 
     /// Network mode (tap, mycelium, none)
     #[arg(long, default_value = "mycelium")]
@@ -197,8 +204,9 @@ pub struct CreateArgs {
     #[arg(long, default_value = "512")]
     pub memory: u32,
 
-    #[arg(long, default_value = "auto")]
-    pub storage: String,
+    /// Storage backend override (block, virtiofs)
+    #[arg(long)]
+    pub storage: Option<String>,
 
     #[arg(long, default_value = "mycelium")]
     pub network: String,
@@ -319,7 +327,23 @@ pub struct StatsArgs {
 }
 
 #[derive(clap::Args)]
-pub struct ImagesArgs {}
+pub struct ImagesArgs {
+    #[command(subcommand)]
+    pub command: Option<ImageCommands>,
+}
+
+#[derive(Subcommand)]
+pub enum ImageCommands {
+    /// Remove a cached image by reference or digest
+    #[command(alias = "remove")]
+    Rm(ImageRmArgs),
+}
+
+#[derive(clap::Args, Clone)]
+pub struct ImageRmArgs {
+    /// Image reference (e.g. ubuntu:24.04) or digest (e.g. sha256:...)
+    pub image: String,
+}
 
 #[derive(clap::Args)]
 pub struct PruneArgs {}

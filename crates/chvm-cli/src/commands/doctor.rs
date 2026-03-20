@@ -15,6 +15,9 @@ pub async fn execute(args: &DoctorArgs) -> anyhow::Result<()> {
     println!("CHVM Doctor - System Check\n");
 
     let mut all_ok = true;
+    let paths = Paths::resolve();
+    let config = Config::load(&paths.config_file).unwrap_or_default();
+    let default_storage_backend = config.default_storage_backend.as_str();
 
     // Check Cloud Hypervisor
     print!("Cloud Hypervisor: ");
@@ -40,6 +43,7 @@ pub async fn execute(args: &DoctorArgs) -> anyhow::Result<()> {
         "virtiofsd",
         "/usr/libexec/virtiofsd",
         "/usr/lib/virtiofsd",
+        "/usr/lib/qemu/virtiofsd",
         "/usr/local/bin/virtiofsd",
     ];
     let found = virtiofsd_paths
@@ -48,11 +52,14 @@ pub async fn execute(args: &DoctorArgs) -> anyhow::Result<()> {
     if found {
         println!("OK");
     } else {
-        println!("NOT FOUND (optional, needed for virtiofs storage)");
+        if default_storage_backend == "virtiofs" {
+            println!("NOT FOUND (default virtiofs will fall back to block)");
+        } else {
+            println!("NOT FOUND (optional, needed for virtiofs storage)");
+        }
     }
 
     // Check kernel
-    let paths = Paths::resolve();
     print!("Kernel: ");
     let default_kernel = paths.kernels.join("vmlinux");
     if default_kernel.exists() {
@@ -81,8 +88,12 @@ pub async fn execute(args: &DoctorArgs) -> anyhow::Result<()> {
     if which::which("mkfs.ext4").is_ok() {
         println!("OK");
     } else {
-        println!("NOT FOUND (needed for block storage)");
-        all_ok = false;
+        if default_storage_backend == "block" {
+            println!("NOT FOUND (required for default block storage)");
+            all_ok = false;
+        } else {
+            println!("NOT FOUND (optional, needed for block storage)");
+        }
     }
 
     // Check iptables

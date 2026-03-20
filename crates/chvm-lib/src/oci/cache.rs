@@ -44,6 +44,14 @@ pub struct ImageCache {
     index: CacheIndex,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RemovedImage {
+    pub digest: String,
+    pub removed_refs: Vec<String>,
+    pub deleted_image: bool,
+    pub remaining_refs: usize,
+}
+
 impl ImageCache {
     pub fn new(cache_dir: &Path) -> Result<Self> {
         std::fs::create_dir_all(cache_dir)?;
@@ -146,42 +154,64 @@ impl ImageCache {
         images
     }
 
-    pub fn remove(&mut self, reference: &str) -> Result<()> {
+    pub fn remove_digest(&mut self, digest: &str) -> Result<RemovedImage> {
         let _lock = FileLock::exclusive(&self.index_path())?;
         self.reload_index()?;
 
-        let digest = sanitize_digest(reference);
-        if let Some(img) = self.index.images.remove(&digest) {
-            let image_dir = self.cache_dir.join(&digest);
-            let _ = std::fs::remove_dir_all(&image_dir);
-            if let Some(ref rootfs) = img.rootfs_path {
-                let _ = std::fs::remove_dir_all(rootfs);
-            }
+        let digest_key = sanitize_digest(digest);
+        if let Some(img) = self.index.images.remove(&digest_key) {
+            self.delete_cached_image(&digest_key, &img);
             self.save_index()?;
-            return Ok(());
+            return Ok(RemovedImage {
+                digest: img.digest,
+                removed_refs: img.refs,
+                deleted_image: true,
+                remaining_refs: 0,
+            });
         }
 
-        // Try by reference
-        let to_remove: Option<String> = self
-            .index
-            .images
-            .iter()
-            .find(|(_, img)| img.refs.iter().any(|r| r == reference))
-            .map(|(k, _)| k.clone());
+        Err(ChvmError::ImageNotFound(digest.to_string()))
+    }
 
-        if let Some(key) = to_remove {
-            if let Some(img) = self.index.images.remove(&key) {
-                let image_dir = self.cache_dir.join(&key);
-                let _ = std::fs::remove_dir_all(&image_dir);
-                if let Some(ref rootfs) = img.rootfs_path {
-                    let _ = std::fs::remove_dir_all(rootfs);
-                }
+    pub fn remove_reference(&mut self, reference: &str) -> Result<RemovedImage> {
+        let _lock = FileLock::exclusive(&self.index_path())?;
+        self.reload_index()?;
+
+        let Some((digest_key, stored_ref)) =
+            self.index.images.iter().find_map(|(key, img)| {
+                stored_ref_for_image(img, reference).map(|r| (key.clone(), r))
+            })
+        else {
+            return Err(ChvmError::ImageNotFound(reference.to_string()));
+        };
+
+        let (digest, remaining_refs) = {
+            let img = self
+                .index
+                .images
+                .get_mut(&digest_key)
+                .ok_or_else(|| ChvmError::ImageNotFound(reference.to_string()))?;
+            img.refs.retain(|r| r != &stored_ref);
+            (img.digest.clone(), img.refs.len())
+        };
+
+        let deleted_image = if remaining_refs == 0 {
+            if let Some(img) = self.index.images.remove(&digest_key) {
+                self.delete_cached_image(&digest_key, &img);
             }
-            self.save_index()?;
-            Ok(())
+            true
         } else {
-            Err(ChvmError::ImageNotFound(reference.to_string()))
-        }
+            false
+        };
+
+        self.save_index()?;
+
+        Ok(RemovedImage {
+            digest,
+            removed_refs: vec![stored_ref],
+            deleted_image,
+            remaining_refs,
+        })
     }
 
     /// Ensure rootfs is extracted, returning the path.
@@ -265,13 +295,14 @@ impl ImageCache {
         variant: &str,
         prepared_dir: &Path,
     ) -> Result<()> {
-
         let _lock = FileLock::exclusive(&self.index_path())?;
         self.reload_index()?;
 
         if let Some(img) = self.index.images.get_mut(digest) {
-            img.prepared_rootfs_paths
-                .insert(variant.to_string(), prepared_dir.to_string_lossy().to_string());
+            img.prepared_rootfs_paths.insert(
+                variant.to_string(),
+                prepared_dir.to_string_lossy().to_string(),
+            );
             img.last_used_at = Utc::now();
         }
         self.save_index()?;
@@ -288,12 +319,29 @@ impl ImageCache {
         atomic_write(&path, data.as_bytes())?;
         Ok(())
     }
+
+    fn delete_cached_image(&self, digest_key: &str, img: &CachedImage) {
+        let image_dir = self.cache_dir.join(digest_key);
+        let _ = std::fs::remove_dir_all(&image_dir);
+        if let Some(ref rootfs) = img.rootfs_path {
+            let _ = std::fs::remove_dir_all(rootfs);
+        }
+    }
 }
 
 fn load_index(cache_dir: &Path) -> Result<CacheIndex> {
     let path = cache_dir.join("index.json");
     let data = std::fs::read_to_string(path)?;
     Ok(serde_json::from_str(&data)?)
+}
+
+fn stored_ref_for_image(img: &CachedImage, reference: &str) -> Option<String> {
+    if let Some(stored) = img.refs.iter().find(|r| *r == reference) {
+        return Some(stored.clone());
+    }
+
+    let normalized = crate::oci::registry::normalize_reference(reference);
+    img.refs.iter().find(|r| *r == &normalized).cloned()
 }
 
 fn prepared_rootfs_variant(inject_mycelium: bool) -> String {
@@ -321,6 +369,7 @@ fn copy_dir_contents(src: &Path, dest: &Path) -> std::io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::oci::pull::PullResult;
 
     fn make_cached_image(cache_dir: &Path) -> CachedImage {
         let digest = "sha256:test";
@@ -361,5 +410,110 @@ mod tests {
             .get(&prepared_rootfs_variant(false))
             .cloned();
         assert_eq!(reloaded.as_deref(), Some(prepared.as_str()));
+    }
+
+    fn add_image(
+        cache: &mut ImageCache,
+        cache_dir: &Path,
+        reference: &str,
+        digest: &str,
+    ) -> CachedImage {
+        let digest_key = sanitize_digest(digest);
+        let image_dir = cache_dir.join(&digest_key);
+        std::fs::create_dir_all(&image_dir).unwrap();
+        let layer_path = image_dir.join("layer.tar.gz");
+        std::fs::write(&layer_path, b"layer").unwrap();
+
+        cache
+            .add(&PullResult {
+                reference: reference.to_string(),
+                digest: digest.to_string(),
+                config: None,
+                layer_paths: vec![layer_path.to_string_lossy().to_string()],
+                cache_dir: image_dir,
+            })
+            .unwrap()
+    }
+
+    #[test]
+    fn remove_reference_preserves_shared_digest() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut cache = ImageCache::new(tmp.path()).unwrap();
+        let digest = "sha256:abc123";
+        add_image(
+            &mut cache,
+            tmp.path(),
+            "docker.io/library/ubuntu:24.04",
+            digest,
+        );
+        add_image(
+            &mut cache,
+            tmp.path(),
+            "docker.io/library/ubuntu:latest",
+            digest,
+        );
+
+        let result = cache.remove_reference("ubuntu:24.04").unwrap();
+
+        assert_eq!(result.digest, digest);
+        assert_eq!(result.removed_refs, vec!["docker.io/library/ubuntu:24.04"]);
+        assert!(!result.deleted_image);
+        assert_eq!(result.remaining_refs, 1);
+
+        let cached = cache.get("ubuntu:latest").unwrap();
+        assert_eq!(cached.refs, vec!["docker.io/library/ubuntu:latest"]);
+    }
+
+    #[test]
+    fn remove_reference_deletes_last_ref() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut cache = ImageCache::new(tmp.path()).unwrap();
+        let digest = "sha256:def456";
+        add_image(
+            &mut cache,
+            tmp.path(),
+            "docker.io/library/alpine:latest",
+            digest,
+        );
+
+        let result = cache.remove_reference("alpine:latest").unwrap();
+
+        assert_eq!(result.digest, digest);
+        assert!(result.deleted_image);
+        assert_eq!(result.remaining_refs, 0);
+        assert!(matches!(
+            cache.get("alpine:latest"),
+            Err(ChvmError::ImageNotFound(_))
+        ));
+    }
+
+    #[test]
+    fn remove_digest_deletes_all_refs() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut cache = ImageCache::new(tmp.path()).unwrap();
+        let digest = "sha256:789abc";
+        add_image(
+            &mut cache,
+            tmp.path(),
+            "docker.io/library/debian:12",
+            digest,
+        );
+        add_image(
+            &mut cache,
+            tmp.path(),
+            "docker.io/library/debian:stable",
+            digest,
+        );
+
+        let result = cache.remove_digest(digest).unwrap();
+
+        assert_eq!(result.digest, digest);
+        assert_eq!(result.removed_refs.len(), 2);
+        assert!(result.deleted_image);
+        assert_eq!(result.remaining_refs, 0);
+        assert!(matches!(
+            cache.get("debian:12"),
+            Err(ChvmError::ImageNotFound(_))
+        ));
     }
 }

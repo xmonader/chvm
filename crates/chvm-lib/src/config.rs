@@ -49,7 +49,7 @@ fn default_network_mode() -> String {
     "mycelium".into()
 }
 fn default_storage_backend() -> String {
-    "auto".into()
+    "virtiofs".into()
 }
 fn default_bridge() -> String {
     "chvm0".into()
@@ -111,7 +111,7 @@ mod tests {
         assert_eq!(config.default_vcpu, 1);
         assert_eq!(config.default_memory_mb, 512);
         assert_eq!(config.default_network_mode, "mycelium");
-        assert_eq!(config.default_storage_backend, "auto");
+        assert_eq!(config.default_storage_backend, "virtiofs");
         assert_eq!(config.default_bridge, "chvm0");
         assert!(config.kernel_path.is_none());
         assert!(config.virtiofsd_bin.is_none());

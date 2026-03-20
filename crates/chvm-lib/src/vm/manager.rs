@@ -665,6 +665,31 @@ impl VmManager {
         Ok(pruned)
     }
 
+    pub fn remove_image(&mut self, image: &str) -> Result<oci::RemovedImage> {
+        let cached = self.image_cache.get(image)?;
+        let dependents: Vec<String> = self
+            .state_store
+            .list()
+            .iter()
+            .filter(|state| state.image_digest.as_deref() == Some(cached.digest.as_str()))
+            .map(|state| format!("{} ({})", state.name, state.id))
+            .collect();
+
+        if !dependents.is_empty() {
+            return Err(ChvmError::ImageInUse(format!(
+                "{} referenced by {}",
+                cached.digest,
+                dependents.join(", ")
+            )));
+        }
+
+        if image.starts_with("sha256:") {
+            self.image_cache.remove_digest(image)
+        } else {
+            self.image_cache.remove_reference(image)
+        }
+    }
+
     // -- Private helpers --
 
     /// Resolve image or local rootfs, returning (rootfs_path, image_ref, digest, config).
@@ -808,36 +833,33 @@ impl VmManager {
     }
 
     fn select_storage_backend(&self, requested: Option<&str>, kernel_path: &str) -> Result<String> {
-        let backend = requested.unwrap_or(&self.config.default_storage_backend);
-        match backend {
-            "block" | "virtiofs" => Ok(backend.to_string()),
-            "auto" => {
-                if self.kernel_supports_default_virtiofs(Path::new(kernel_path)) {
-                    Ok("virtiofs".into())
-                } else {
-                    Ok("block".into())
-                }
-            }
-            other => Err(ChvmError::ConfigError(format!(
-                "invalid storage backend: {other}"
-            ))),
+        let backend = choose_storage_backend(
+            requested,
+            &self.config.default_storage_backend,
+            requested.is_some() || self.can_use_virtiofs(Path::new(kernel_path)),
+        )?;
+
+        if requested.is_none()
+            && self.config.default_storage_backend == "virtiofs"
+            && backend == "block"
+        {
+            warn!(
+                kernel = kernel_path,
+                "Default virtiofs storage unavailable on this host, falling back to block"
+            );
         }
+
+        Ok(backend)
     }
 
-    fn kernel_supports_default_virtiofs(&self, kernel_path: &Path) -> bool {
-        let kernel_mgr = KernelManager::new(&self.paths.kernels);
-        let resolved =
-            std::fs::canonicalize(kernel_path).unwrap_or_else(|_| kernel_path.to_path_buf());
-        let is_chvm_kernel = resolved
-            .file_name()
-            .and_then(|name| name.to_str())
-            .is_some_and(|name| name.contains("chvm"));
-        if !is_chvm_kernel {
+    fn can_use_virtiofs(&self, kernel_path: &Path) -> bool {
+        if storage::virtiofs::find_virtiofsd_path(self.config.virtiofsd_bin.as_deref()).is_err() {
             return false;
         }
 
+        let kernel_mgr = KernelManager::new(&self.paths.kernels);
         match kernel_mgr.detect_capabilities(kernel_path) {
-            Some(caps) => caps.has_vsock && caps.has_virtiofs,
+            Some(caps) => caps.has_virtiofs,
             None => true,
         }
     }
@@ -1216,6 +1238,23 @@ fn parse_bridge_ip_octet(ip: &str) -> Option<u16> {
     addr.rsplit('.').next()?.parse().ok()
 }
 
+fn choose_storage_backend(
+    requested_backend: Option<&str>,
+    default_backend: &str,
+    virtiofs_available: bool,
+) -> Result<String> {
+    match requested_backend.unwrap_or(default_backend) {
+        "block" => Ok("block".into()),
+        "virtiofs" if virtiofs_available => Ok("virtiofs".into()),
+        "virtiofs" => Ok("block".into()),
+        "auto" if virtiofs_available => Ok("virtiofs".into()),
+        "auto" => Ok("block".into()),
+        other => Err(ChvmError::ConfigError(format!(
+            "invalid storage backend: {other}"
+        ))),
+    }
+}
+
 fn validate_rootfs(path: &Path) -> Result<()> {
     if !path.is_dir() {
         return Err(ChvmError::InvalidRootfs(format!(
@@ -1446,6 +1485,7 @@ async fn wait_for_exit(pid: i32, timeout: std::time::Duration) {
 mod tests {
     use super::*;
     use crate::config::Config;
+    use crate::oci::pull::PullResult;
     use crate::paths::Paths;
 
     fn make_state(id: &str, name: &str) -> RuntimeState {
@@ -1676,39 +1716,15 @@ mod tests {
     }
 
     #[test]
-    fn build_vm_config_auto_falls_back_to_block_for_non_chvm_kernel() {
-        let tmp = tempfile::tempdir().unwrap();
-        let paths = Paths::new(tmp.path().join("chvm"));
-        let manager = VmManager::new(Config::default(), paths).unwrap();
-        let vm_dir = tmp.path().join("vm");
-        let kernel_path = tmp.path().join("vmlinux-host");
-        std::fs::create_dir_all(&vm_dir).unwrap();
-        std::fs::write(&kernel_path, b"kernel").unwrap();
+    fn choose_storage_backend_falls_back_to_block_when_virtiofs_unavailable() {
+        let backend = choose_storage_backend(None, "virtiofs", false).unwrap();
+        assert_eq!(backend, "block");
+    }
 
-        let opts = CreateOptions {
-            name: Some("vm".into()),
-            image_ref: Some("alpine:latest".into()),
-            rootfs_path: None,
-            vcpu: None,
-            memory_mb: None,
-            storage_backend: Some("auto".into()),
-            network_mode: Some(NetworkMode::None),
-            port_forwards: vec![],
-            env: vec![],
-            cmd: vec![],
-            mounts: vec![],
-            kernel_path: Some(kernel_path.to_string_lossy().to_string()),
-            detach: false,
-            remove_after: false,
-            mycelium_peers: vec![],
-            credentials: None,
-        };
-
-        let vm_config = manager
-            .build_vm_config("a1b2c3d4e5f6", "vm", &opts, "/rootfs".into(), None, &vm_dir)
-            .unwrap();
-
-        assert_eq!(vm_config.rootfs.rootfs_type, RootfsType::VirtioBlock);
+    #[test]
+    fn choose_storage_backend_preserves_explicit_virtiofs_request() {
+        let backend = choose_storage_backend(Some("virtiofs"), "virtiofs", true).unwrap();
+        assert_eq!(backend, "virtiofs");
     }
 
     #[test]
@@ -1767,5 +1783,38 @@ mod tests {
 
         let err = validate_rootfs(tmp.path()).unwrap_err().to_string();
         assert!(err.contains("unsupported ELF machine"));
+    }
+
+    #[test]
+    fn remove_image_rejects_digest_still_referenced_by_vm() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let paths = crate::paths::Paths::new(temp_dir.path().join("chvm"));
+        paths.ensure_dirs().unwrap();
+        let config = Config::default();
+        let mut manager = VmManager::new(config, paths.clone()).unwrap();
+
+        let digest = "sha256:123456";
+        let digest_key = crate::oci::registry::sanitize_digest(digest);
+        let image_dir = paths.images.join(&digest_key);
+        std::fs::create_dir_all(&image_dir).unwrap();
+        let layer_path = image_dir.join("layer.tar.gz");
+        std::fs::write(&layer_path, b"layer").unwrap();
+        manager
+            .image_cache
+            .add(&PullResult {
+                reference: "docker.io/library/ubuntu:24.04".to_string(),
+                digest: digest.to_string(),
+                config: None,
+                layer_paths: vec![layer_path.to_string_lossy().to_string()],
+                cache_dir: image_dir,
+            })
+            .unwrap();
+
+        let mut state = make_state("vm123", "web");
+        state.image_digest = Some(digest.to_string());
+        manager.state_store.save(&state).unwrap();
+
+        let result = manager.remove_image("ubuntu:24.04");
+        assert!(matches!(result, Err(ChvmError::ImageInUse(_))));
     }
 }

@@ -1,7 +1,7 @@
 use crate::cli::VersionArgs;
 
 pub fn execute(_args: &VersionArgs) -> anyhow::Result<()> {
-    println!("chvm version {}", env!("CARGO_PKG_VERSION"));
+    println!("chvm version {}", env!("CHVM_FULL_VERSION"));
     println!("Cloud Hypervisor MicroVM Manager");
 
     // Show CH version if available

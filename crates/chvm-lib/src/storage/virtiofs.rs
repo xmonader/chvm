@@ -56,7 +56,7 @@ impl StorageBackend for VirtioFsStorage {
 
         // Start virtiofsd
         let socket_path = storage_dir.join("virtiofsd.sock");
-        let virtiofsd_bin = match find_virtiofsd() {
+        let virtiofsd_bin = match find_virtiofsd_path(None) {
             Ok(bin) => bin,
             Err(e) => {
                 // Unmount overlay before returning error
@@ -117,12 +117,19 @@ impl StorageBackend for VirtioFsStorage {
     }
 }
 
-fn find_virtiofsd() -> anyhow::Result<String> {
+pub fn find_virtiofsd_path(configured: Option<&str>) -> anyhow::Result<String> {
+    if let Some(path) = configured {
+        if Path::new(path).exists() {
+            return Ok(path.to_string());
+        }
+    }
+
     crate::utils::find_command(
         "virtiofsd",
         &[
             "/usr/libexec/virtiofsd",
             "/usr/lib/virtiofsd",
+            "/usr/lib/qemu/virtiofsd",
             "/usr/local/bin/virtiofsd",
             "/usr/bin/virtiofsd",
         ],

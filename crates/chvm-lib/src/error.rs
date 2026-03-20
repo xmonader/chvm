@@ -20,6 +20,9 @@ pub enum ChvmError {
     #[error("Image not found: {0}")]
     ImageNotFound(String),
 
+    #[error("Image is still in use: {0}")]
+    ImageInUse(String),
+
     #[error("Invalid image reference: {0}")]
     InvalidImageRef(String),
 
@@ -106,6 +109,15 @@ mod tests {
     fn test_image_not_found_error() {
         let err = ChvmError::ImageNotFound("alpine:latest".to_string());
         assert_eq!(err.to_string(), "Image not found: alpine:latest");
+    }
+
+    #[test]
+    fn test_image_in_use_error() {
+        let err = ChvmError::ImageInUse("sha256:abc referenced by vm1".to_string());
+        assert_eq!(
+            err.to_string(),
+            "Image is still in use: sha256:abc referenced by vm1"
+        );
     }
 
     #[test]

@@ -63,7 +63,8 @@ async fn main() -> anyhow::Result<()> {
         Commands::Logs(args) => commands::logs::execute(&mut manager, args),
         Commands::Inspect(args) => commands::inspect::execute(&mut manager, args).await,
         Commands::Stats(args) => commands::stats::execute(&mut manager, args).await,
-        Commands::Images(args) => commands::images::execute(&manager, args),
+        Commands::Images(args) => commands::images::execute(&mut manager, args),
+        Commands::Rmi(args) => commands::images::execute_remove(&mut manager, args),
         Commands::Prune(args) => commands::prune::execute(&mut manager, args).await,
         // Already handled above
         Commands::Version(_)

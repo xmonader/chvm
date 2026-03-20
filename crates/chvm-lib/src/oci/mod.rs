@@ -10,6 +10,6 @@ pub use auth::{
     docker_config_path, registry_from_image_ref, resolve_credentials, DockerConfig,
     RegistryCredentials,
 };
-pub use cache::{CachedImage, ImageCache};
+pub use cache::{CachedImage, ImageCache, RemovedImage};
 pub use image_config::ImageConfig;
 pub use pull::PullResult;
