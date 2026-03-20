@@ -38,10 +38,15 @@ impl NetworkBackend for TapNetwork {
         // Bring up TAP
         run_cmd("ip", &["link", "set", &tap_device, "up"])?;
 
-        // Allocate first unused IP in subnet (avoids collision when VMs are stopped/started)
-        let instance_num = find_unused_ip(bridge_name);
-        let ip_address = format!("{}.{}/24", bridge::SUBNET_PREFIX, instance_num);
-        let gateway = bridge::GATEWAY.to_string();
+        // Prefer the manager-assigned guest IP. Fall back to local discovery only if absent.
+        let ip_address = config.ip_address.clone().unwrap_or_else(|| {
+            let instance_num = find_unused_ip(bridge_name);
+            format!("{}.{}/24", bridge::SUBNET_PREFIX, instance_num)
+        });
+        let gateway = config
+            .gateway
+            .clone()
+            .unwrap_or_else(|| bridge::GATEWAY.to_string());
 
         // Setup port forwards
         if !config.port_forwards.is_empty() {

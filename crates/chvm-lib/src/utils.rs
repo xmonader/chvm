@@ -1,4 +1,6 @@
+use std::collections::HashSet;
 use std::fs::File;
+use std::net::IpAddr;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -138,6 +140,60 @@ pub fn invoking_user_home() -> Option<std::path::PathBuf> {
     dirs::home_dir()
 }
 
+/// Discover host DNS servers that are reachable from the guest.
+/// Prefers systemd-resolved's uplink resolv.conf over the local stub resolver.
+pub fn discover_host_dns_servers() -> Vec<String> {
+    for path in ["/run/systemd/resolve/resolv.conf", "/etc/resolv.conf"] {
+        let Ok(contents) = std::fs::read_to_string(path) else {
+            continue;
+        };
+
+        let servers = parse_resolv_conf_nameservers(&contents);
+        if !servers.is_empty() {
+            return servers;
+        }
+    }
+
+    Vec::new()
+}
+
+fn parse_resolv_conf_nameservers(contents: &str) -> Vec<String> {
+    let mut seen = HashSet::new();
+    let mut servers = Vec::new();
+
+    for line in contents.lines() {
+        let line = line.trim();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+
+        let mut parts = line.split_whitespace();
+        if parts.next() != Some("nameserver") {
+            continue;
+        }
+
+        let Some(server) = parts.next() else {
+            continue;
+        };
+
+        if is_unusable_nameserver(server) || !seen.insert(server.to_string()) {
+            continue;
+        }
+
+        servers.push(server.to_string());
+    }
+
+    servers
+}
+
+fn is_unusable_nameserver(server: &str) -> bool {
+    match server.parse::<IpAddr>() {
+        Ok(IpAddr::V4(ip)) => ip.is_loopback() || ip.is_unspecified(),
+        Ok(IpAddr::V6(ip)) => ip.is_loopback() || ip.is_unspecified(),
+        Err(_) => false,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -251,6 +307,33 @@ mod tests {
                 std::env::remove_var("SUDO_USER");
             }
         }
+    }
+
+    #[test]
+    fn test_parse_resolv_conf_nameservers_prefers_real_servers() {
+        let contents = r#"
+        # comment
+        nameserver 127.0.0.53
+        nameserver 192.168.1.1
+        nameserver 1.1.1.1
+        nameserver 192.168.1.1
+        "#;
+
+        let servers = parse_resolv_conf_nameservers(contents);
+
+        assert_eq!(servers, vec!["192.168.1.1", "1.1.1.1"]);
+    }
+
+    #[test]
+    fn test_parse_resolv_conf_nameservers_keeps_ipv6() {
+        let contents = r#"
+        nameserver ::1
+        nameserver 2001:4860:4860::8888
+        "#;
+
+        let servers = parse_resolv_conf_nameservers(contents);
+
+        assert_eq!(servers, vec!["2001:4860:4860::8888"]);
     }
 
     #[test]

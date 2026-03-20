@@ -8,6 +8,8 @@ pub struct SetupConfig {
     pub mode: String,
     pub state_dir: PathBuf,
     pub mac_address: Option<String>,
+    pub ip_address: Option<String>,
+    pub gateway: Option<String>,
     pub port_forwards: Vec<PortForward>,
     pub mycelium_peers: Vec<String>,
     pub bridge: Option<String>,

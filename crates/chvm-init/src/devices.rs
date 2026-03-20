@@ -1,3 +1,5 @@
+use std::os::unix::fs::PermissionsExt;
+
 pub fn create_devices() -> Result<(), Box<dyn std::error::Error>> {
     let devices: &[(&str, u32, u32, u64, u64)] = &[
         ("/dev/null", libc::S_IFCHR | 0o666, 0, 1, 3),
@@ -21,8 +23,15 @@ pub fn create_devices() -> Result<(), Box<dyn std::error::Error>> {
                 let err = std::io::Error::last_os_error();
                 if err.raw_os_error() != Some(libc::EEXIST) {
                     eprintln!("[init] Warning: Failed to create {path}: {err}");
+                    continue;
                 }
             }
+        }
+
+        if let Err(err) =
+            std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode & 0o7777))
+        {
+            eprintln!("[init] Warning: Failed to chmod {path}: {err}");
         }
     }
 

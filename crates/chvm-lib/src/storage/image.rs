@@ -1,4 +1,4 @@
-use std::os::unix::fs::PermissionsExt;
+use std::os::unix::fs::{symlink, PermissionsExt};
 use std::path::Path;
 use std::process::Command;
 
@@ -8,8 +8,9 @@ use crate::utils::invoking_user_home;
 
 /// Overhead multiplier for ext4 image (filesystem metadata + free space).
 const IMAGE_SIZE_OVERHEAD: f64 = 1.5;
-/// Minimum ext4 image size (256 MB).
-const MIN_IMAGE_SIZE: u64 = 256 * 1024 * 1024;
+/// Minimum ext4 image size (512 MB) so Ubuntu-based guests can install
+/// basic packages like OpenSSH without exhausting the writable layer.
+const MIN_IMAGE_SIZE: u64 = 512 * 1024 * 1024;
 
 /// Kernel modules needed for vsock and virtiofs (host-side relative paths).
 /// NOTE: Keep in sync with GUEST_KERNEL_MODULES in chvm-init/src/helpers.rs
@@ -105,6 +106,7 @@ pub fn create_ext4_image(
 
         // Inject binaries and modules
         inject_runtime_binaries(&mount_point, inject_mycelium);
+        inject_busybox_ip_tools(&mount_point);
         inject_kernel_modules(&mount_point);
 
         Ok(())
@@ -198,6 +200,41 @@ pub(crate) fn inject_binary(
     }
 
     warn!("{name} binary not found, skipping injection");
+}
+
+/// Inject a static BusyBox into the guest and expose iproute-compatible applets.
+pub(crate) fn inject_busybox_ip_tools(mount_point: &Path) {
+    inject_binary(
+        mount_point,
+        "chvm-bin/busybox",
+        "busybox",
+        &[
+            "./bin/busybox",
+            "/usr/local/bin/busybox",
+            "/usr/bin/busybox",
+            "/bin/busybox",
+        ],
+        None,
+    );
+
+    let busybox_path = mount_point.join("chvm-bin/busybox");
+    if !busybox_path.exists() {
+        return;
+    }
+
+    for applet in ["ip", "route", "ifconfig"] {
+        let link_path = mount_point.join(format!("chvm-bin/{applet}"));
+        if link_path.exists() {
+            if let Err(e) = std::fs::remove_file(&link_path) {
+                warn!(path = %link_path.display(), error = %e, "Failed to replace busybox applet link");
+                continue;
+            }
+        }
+
+        if let Err(e) = symlink("busybox", &link_path) {
+            warn!(path = %link_path.display(), error = %e, "Failed to create busybox applet link");
+        }
+    }
 }
 
 fn inject_kernel_modules(mount_point: &Path) {

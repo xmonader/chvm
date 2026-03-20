@@ -89,6 +89,11 @@ impl StateStore {
         Ok(())
     }
 
+    pub fn reload(&mut self) -> Result<()> {
+        self.states.clear();
+        self.load_all()
+    }
+
     pub fn get(&self, vm_id: &str) -> Result<&RuntimeState> {
         self.states
             .get(vm_id)
@@ -364,6 +369,14 @@ impl VmManager {
             Ok(pid) => pid,
             Err(e) => {
                 self.cleanup_failed_start(&state, &vm_dir).await;
+                state.status = VmState::Failed;
+                state.stopped_at = Some(Utc::now());
+                state.vmm_pid = 0;
+                state.network_state = None;
+                state.vm_config.network.tap_device = None;
+                state.vm_config.network.ip_address = None;
+                state.vm_config.network.gateway = None;
+                self.state_store.save(&state)?;
                 return Err(e);
             }
         };
@@ -853,18 +866,31 @@ impl VmManager {
         Ok((state.vm_config.rootfs.source.clone(), true))
     }
 
-    async fn setup_network(&self, state: &mut RuntimeState, vm_dir: &Path) -> Result<()> {
+    async fn setup_network(&mut self, state: &mut RuntimeState, vm_dir: &Path) -> Result<()> {
+        let _network_lock = FileLock::exclusive(&self.paths.vms.join(".network-allocation"))?;
+        self.state_store.reload()?;
+
         let backend: Box<dyn NetworkBackend> = match state.vm_config.network.mode {
             NetworkMode::Tap => Box::new(network::tap::TapNetwork),
             NetworkMode::Mycelium => Box::new(network::mycelium::MyceliumNetwork),
             NetworkMode::None => return Ok(()),
         };
 
+        let allocated_ip = match state.vm_config.network.mode {
+            NetworkMode::Tap | NetworkMode::Mycelium => Some(self.allocate_bridge_ip(state)?),
+            NetworkMode::None => None,
+        };
+        let allocated_gateway = allocated_ip
+            .as_ref()
+            .map(|_| network::bridge::GATEWAY.to_string());
+
         let config = SetupConfig {
             vm_id: state.id.clone(),
             mode: state.vm_config.network.mode.to_string(),
             state_dir: vm_dir.to_path_buf(),
             mac_address: state.vm_config.network.mac_address.clone(),
+            ip_address: allocated_ip,
+            gateway: allocated_gateway,
             port_forwards: state.vm_config.network.port_forwards.clone(),
             mycelium_peers: state.vm_config.network.mycelium_peers.clone(),
             bridge: Some(self.config.default_bridge.clone()),
@@ -906,6 +932,14 @@ impl VmManager {
                 .cmdline
                 .push_str(&format!(" chvm.gw={}", gw));
         }
+        let dns_servers = crate::utils::discover_host_dns_servers();
+        if !dns_servers.is_empty() {
+            state
+                .vm_config
+                .kernel
+                .cmdline
+                .push_str(&format!(" chvm.dns={}", dns_servers.join(",")));
+        }
         if result.mycelium_enabled && !result.mycelium_peers.is_empty() {
             let peers_str = result.mycelium_peers.join(",");
             state
@@ -914,6 +948,10 @@ impl VmManager {
                 .cmdline
                 .push_str(&format!(" chvm.mycelium_peer={}", peers_str));
         }
+
+        // Persist the reserved IP before releasing the allocation lock so concurrent
+        // starts cannot pick the same address.
+        self.state_store.save(state)?;
 
         Ok(())
     }
@@ -1117,6 +1155,65 @@ impl VmManager {
             }
         }
     }
+
+    fn allocate_bridge_ip(&self, state: &RuntimeState) -> Result<String> {
+        let used_octets = self.used_bridge_octets(&state.id);
+        let preferred_octet = bridge_ip_octet(state);
+
+        if let Some(octet) = preferred_octet {
+            if !used_octets.contains(&octet) {
+                return Ok(format!(
+                    "{}.{}{}",
+                    network::bridge::SUBNET_PREFIX,
+                    octet,
+                    "/24"
+                ));
+            }
+        }
+
+        for octet in 2u16..255 {
+            if !used_octets.contains(&octet) {
+                return Ok(format!(
+                    "{}.{}{}",
+                    network::bridge::SUBNET_PREFIX,
+                    octet,
+                    "/24"
+                ));
+            }
+        }
+
+        Err(ChvmError::NetworkError(
+            "bridge subnet exhausted: no free IPv4 addresses available".into(),
+        ))
+    }
+
+    fn used_bridge_octets(&self, exclude_vm_id: &str) -> std::collections::HashSet<u16> {
+        self.state_store
+            .list()
+            .into_iter()
+            .filter(|state| state.id != exclude_vm_id)
+            .filter(|state| matches!(state.status, VmState::Created | VmState::Running))
+            .filter_map(bridge_ip_octet)
+            .chain(std::iter::once(1))
+            .collect()
+    }
+}
+
+fn bridge_ip_octet(state: &RuntimeState) -> Option<u16> {
+    state
+        .network_state
+        .as_ref()
+        .and_then(|ns| ns.ip_address.as_deref())
+        .or(state.vm_config.network.ip_address.as_deref())
+        .and_then(parse_bridge_ip_octet)
+}
+
+fn parse_bridge_ip_octet(ip: &str) -> Option<u16> {
+    let addr = ip.split('/').next()?;
+    if !addr.starts_with(&format!("{}.", network::bridge::SUBNET_PREFIX)) {
+        return None;
+    }
+    addr.rsplit('.').next()?.parse().ok()
 }
 
 fn validate_rootfs(path: &Path) -> Result<()> {
@@ -1458,6 +1555,67 @@ mod tests {
         // "a1b" should resolve to VM2 (exact name match) not VM1 (prefix match)
         let state = store.resolve("a1b").unwrap();
         assert_eq!(state.id, "ffffff000000");
+    }
+
+    #[test]
+    fn parse_bridge_ip_octet_extracts_last_octet() {
+        assert_eq!(parse_bridge_ip_octet("192.168.200.42/24"), Some(42));
+        assert_eq!(parse_bridge_ip_octet("10.0.0.2/24"), None);
+    }
+
+    #[test]
+    fn allocate_bridge_ip_uses_existing_state_assignments() {
+        let tmp = tempfile::tempdir().unwrap();
+        let paths = Paths::new(tmp.path().join(".chvm"));
+        paths.ensure_dirs().unwrap();
+
+        let config = Config::default();
+        let mut manager = VmManager::new(config, paths).unwrap();
+
+        let mut running = make_state("running-vm", "running");
+        running.status = VmState::Running;
+        running.network_state = Some(NetworkState {
+            tap_device: Some("tap-running".into()),
+            bridge: Some("chvm0".into()),
+            mac_address: None,
+            ip_address: Some("192.168.200.2/24".into()),
+            gateway: Some("192.168.200.1".into()),
+            mycelium_enabled: false,
+            mycelium_peers: vec![],
+            mycelium_ip: None,
+            mycelium_health: None,
+        });
+        running.vm_config.network.mode = NetworkMode::Tap;
+        running.vm_config.network.ip_address = Some("192.168.200.2/24".into());
+        running.vm_config.network.gateway = Some("192.168.200.1".into());
+        manager.state_store.save(&running).unwrap();
+
+        let mut candidate = make_state("candidate-vm", "candidate");
+        candidate.vm_config.network.mode = NetworkMode::Tap;
+
+        assert_eq!(
+            manager.allocate_bridge_ip(&candidate).unwrap(),
+            "192.168.200.3/24"
+        );
+    }
+
+    #[test]
+    fn allocate_bridge_ip_reuses_existing_ip_for_same_vm_if_still_free() {
+        let tmp = tempfile::tempdir().unwrap();
+        let paths = Paths::new(tmp.path().join(".chvm"));
+        paths.ensure_dirs().unwrap();
+
+        let config = Config::default();
+        let manager = VmManager::new(config, paths).unwrap();
+
+        let mut candidate = make_state("candidate-vm", "candidate");
+        candidate.vm_config.network.mode = NetworkMode::Tap;
+        candidate.vm_config.network.ip_address = Some("192.168.200.42/24".into());
+
+        assert_eq!(
+            manager.allocate_bridge_ip(&candidate).unwrap(),
+            "192.168.200.42/24"
+        );
     }
 
     #[test]
