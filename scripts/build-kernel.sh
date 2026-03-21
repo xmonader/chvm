@@ -307,6 +307,7 @@ CONFIG_ACPI_BUTTON=y
 
 # PCI
 CONFIG_PCI=y
+CONFIG_PCI_MSI=y
 CONFIG_PCI_HOST_GENERIC=y
 
 # Crypto (needed by networking)
