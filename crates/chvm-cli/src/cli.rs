@@ -149,6 +149,14 @@ pub struct RunArgs {
     #[arg(long)]
     pub storage: Option<String>,
 
+    /// Rootfs size for the block backend (for example: 2G, 1536M)
+    #[arg(long)]
+    pub disk_size: Option<String>,
+
+    /// Writable-layer quota for the virtiofs backend (for example: 4G)
+    #[arg(long)]
+    pub storage_quota: Option<String>,
+
     /// Network mode (tap, mycelium, none)
     #[arg(long, default_value = "mycelium")]
     pub network: String,
@@ -207,6 +215,14 @@ pub struct CreateArgs {
     /// Storage backend override (block, virtiofs)
     #[arg(long)]
     pub storage: Option<String>,
+
+    /// Rootfs size for the block backend (for example: 2G, 1536M)
+    #[arg(long)]
+    pub disk_size: Option<String>,
+
+    /// Writable-layer quota for the virtiofs backend (for example: 4G)
+    #[arg(long)]
+    pub storage_quota: Option<String>,
 
     #[arg(long, default_value = "mycelium")]
     pub network: String,

@@ -198,6 +198,8 @@ pub struct CreateOptions {
     pub vcpu: Option<u32>,
     pub memory_mb: Option<u32>,
     pub storage_backend: Option<String>,
+    pub block_disk_size_bytes: Option<u64>,
+    pub writable_quota_bytes: Option<u64>,
     pub network_mode: Option<NetworkMode>,
     pub port_forwards: Vec<PortForward>,
     pub env: Vec<String>,
@@ -341,6 +343,7 @@ impl VmManager {
             virtiofs_pid: storage_result.virtiofs_pid,
             block_device: storage_result.block_device.clone(),
             overlay_dir: storage_result.overlay_dir.clone(),
+            overlay_backing_dir: storage_result.overlay_backing_dir.clone(),
         });
 
         // Update rootfs source to point to prepared storage
@@ -785,6 +788,12 @@ impl VmManager {
         if let Some(net) = opts.network_mode {
             builder = builder.network_mode(net);
         }
+        if let Some(size) = opts.block_disk_size_bytes {
+            builder = builder.block_disk_size_bytes(size);
+        }
+        if let Some(size) = opts.writable_quota_bytes {
+            builder = builder.writable_quota_bytes(size);
+        }
         builder = builder.storage_backend(storage_backend);
 
         Ok(builder.build(&self.config))
@@ -824,6 +833,8 @@ impl VmManager {
             tag: "rootfs".into(),
             inject_mycelium,
             inject_runtime_binaries,
+            block_disk_size_bytes: state.vm_config.rootfs.block_disk_size_bytes,
+            writable_quota_bytes: state.vm_config.rootfs.writable_quota_bytes,
         };
 
         backend
@@ -858,10 +869,7 @@ impl VmManager {
         }
 
         let kernel_mgr = KernelManager::new(&self.paths.kernels);
-        match kernel_mgr.detect_capabilities(kernel_path) {
-            Some(caps) => caps.has_virtiofs,
-            None => true,
-        }
+        kernel_mgr.kernel_supports_virtiofs_root(kernel_path)
     }
 
     fn resolve_storage_rootfs_source(
@@ -1100,6 +1108,8 @@ impl VmManager {
                 tag: tag.clone(),
                 inject_mycelium: false,
                 inject_runtime_binaries: false,
+                block_disk_size_bytes: None,
+                writable_quota_bytes: None,
             };
 
             match virtiofs.prepare(&config).await {
@@ -1138,6 +1148,13 @@ impl VmManager {
                 let merged = Path::new(overlay).join("merged");
                 if let Err(e) = nix::mount::umount2(&merged, nix::mount::MntFlags::MNT_DETACH) {
                     warn!(path = %merged.display(), error = %e, "Failed to unmount overlay during cleanup");
+                }
+            }
+            if let Some(ref backing) = ss.overlay_backing_dir {
+                if let Err(e) =
+                    nix::mount::umount2(Path::new(backing), nix::mount::MntFlags::MNT_DETACH)
+                {
+                    warn!(path = %backing, error = %e, "Failed to unmount quota backing during cleanup");
                 }
             }
         }
@@ -1508,6 +1525,8 @@ mod tests {
                     source: "/rootfs".to_string(),
                     rootfs_type: RootfsType::VirtioBlock,
                     read_only: false,
+                    block_disk_size_bytes: None,
+                    writable_quota_bytes: None,
                 },
                 network: NetworkConfig {
                     mode: NetworkMode::None,
@@ -1691,6 +1710,8 @@ mod tests {
             vcpu: None,
             memory_mb: None,
             storage_backend: None,
+            block_disk_size_bytes: None,
+            writable_quota_bytes: None,
             network_mode: None,
             port_forwards: vec![],
             env: vec![],

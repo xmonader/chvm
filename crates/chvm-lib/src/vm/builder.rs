@@ -11,6 +11,8 @@ pub struct VmBuilder {
     memory_mb: Option<u32>,
     network_mode: Option<NetworkMode>,
     storage_backend: Option<String>,
+    block_disk_size_bytes: Option<u64>,
+    writable_quota_bytes: Option<u64>,
     kernel_path: Option<String>,
     cmd: Vec<String>,
     env: Vec<String>,
@@ -34,6 +36,8 @@ impl VmBuilder {
             memory_mb: None,
             network_mode: None,
             storage_backend: None,
+            block_disk_size_bytes: None,
+            writable_quota_bytes: None,
             kernel_path: None,
             cmd: Vec::new(),
             env: Vec::new(),
@@ -70,6 +74,16 @@ impl VmBuilder {
 
     pub fn storage_backend(mut self, backend: String) -> Self {
         self.storage_backend = Some(backend);
+        self
+    }
+
+    pub fn block_disk_size_bytes(mut self, size: u64) -> Self {
+        self.block_disk_size_bytes = Some(size);
+        self
+    }
+
+    pub fn writable_quota_bytes(mut self, size: u64) -> Self {
+        self.writable_quota_bytes = Some(size);
         self
     }
 
@@ -208,6 +222,12 @@ impl VmBuilder {
                 source: self.rootfs_source,
                 rootfs_type: self.rootfs_type,
                 read_only: false,
+                block_disk_size_bytes: self
+                    .block_disk_size_bytes
+                    .or(config.default_block_disk_size_mb.map(|mb| mb * 1024 * 1024)),
+                writable_quota_bytes: self
+                    .writable_quota_bytes
+                    .or(config.default_virtiofs_quota_mb.map(|mb| mb * 1024 * 1024)),
             },
             network: NetworkConfig {
                 mode: network_mode,

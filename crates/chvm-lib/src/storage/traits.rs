@@ -9,6 +9,8 @@ pub struct PrepareConfig {
     pub tag: String,
     pub inject_mycelium: bool,
     pub inject_runtime_binaries: bool,
+    pub block_disk_size_bytes: Option<u64>,
+    pub writable_quota_bytes: Option<u64>,
 }
 
 /// Result of storage preparation.
@@ -17,6 +19,7 @@ pub struct StorageResult {
     pub socket_path: Option<String>,
     pub virtiofs_pid: Option<i32>,
     pub overlay_dir: Option<String>,
+    pub overlay_backing_dir: Option<String>,
 }
 
 /// Storage backend trait.

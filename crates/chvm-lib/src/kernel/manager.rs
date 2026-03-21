@@ -14,6 +14,7 @@ pub struct KernelCapabilities {
     pub has_ipv6: bool,
     pub has_tun: bool,
     pub has_virtiofs: bool,
+    pub can_boot_virtiofs_root: bool,
     pub has_virtio_block: bool,
     pub has_vsock: bool,
 }
@@ -201,28 +202,7 @@ impl KernelManager {
     pub fn detect_capabilities(&self, kernel_path: &Path) -> Option<KernelCapabilities> {
         let config = extract_kernel_config(kernel_path)?;
 
-        Some(KernelCapabilities {
-            has_ipv6: config
-                .get("CONFIG_IPV6")
-                .map(|v| v == "y" || v == "m")
-                .unwrap_or(false),
-            has_tun: config
-                .get("CONFIG_TUN")
-                .map(|v| v == "y" || v == "m")
-                .unwrap_or(false),
-            has_virtiofs: config
-                .get("CONFIG_VIRTIO_FS")
-                .map(|v| v == "y" || v == "m")
-                .unwrap_or(false),
-            has_virtio_block: config
-                .get("CONFIG_VIRTIO_BLK")
-                .map(|v| v == "y" || v == "m")
-                .unwrap_or(false),
-            has_vsock: config
-                .get("CONFIG_VSOCKETS")
-                .map(|v| v == "y" || v == "m")
-                .unwrap_or(false),
-        })
+        Some(kernel_capabilities_from_config(&config))
     }
 
     /// Check mycelium support.
@@ -296,6 +276,27 @@ impl KernelManager {
         false
     }
 
+    pub fn kernel_supports_virtiofs_root(&self, path: &Path) -> bool {
+        if let Some(caps) = self.detect_capabilities(path) {
+            return caps.can_boot_virtiofs_root;
+        }
+
+        let resolved = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+        let name = resolved
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or_default();
+
+        if name.contains("chvm") {
+            return true;
+        }
+        if name.contains("host") {
+            return false;
+        }
+
+        false
+    }
+
     fn find_custom_kernel(&self, kernels: &[KernelInfo]) -> Option<PathBuf> {
         let mut candidates: Vec<&KernelInfo> = kernels
             .iter()
@@ -355,6 +356,36 @@ fn parse_kernel_config(data: &str) -> HashMap<String, String> {
         }
     }
     config
+}
+
+fn kernel_capabilities_from_config(config: &HashMap<String, String>) -> KernelCapabilities {
+    KernelCapabilities {
+        has_ipv6: config
+            .get("CONFIG_IPV6")
+            .map(|v| v == "y" || v == "m")
+            .unwrap_or(false),
+        has_tun: config
+            .get("CONFIG_TUN")
+            .map(|v| v == "y" || v == "m")
+            .unwrap_or(false),
+        has_virtiofs: config
+            .get("CONFIG_VIRTIO_FS")
+            .map(|v| v == "y" || v == "m")
+            .unwrap_or(false),
+        can_boot_virtiofs_root: config
+            .get("CONFIG_FUSE_FS")
+            .zip(config.get("CONFIG_VIRTIO_FS"))
+            .map(|(fuse, virtiofs)| fuse == "y" && virtiofs == "y")
+            .unwrap_or(false),
+        has_virtio_block: config
+            .get("CONFIG_VIRTIO_BLK")
+            .map(|v| v == "y" || v == "m")
+            .unwrap_or(false),
+        has_vsock: config
+            .get("CONFIG_VSOCKETS")
+            .map(|v| v == "y" || v == "m")
+            .unwrap_or(false),
+    }
 }
 
 fn extract_vmlinux(src: &str, dest: &Path) -> Result<()> {
@@ -442,4 +473,56 @@ fn try_decompress_with_tool(data: &[u8], dest: &Path, tool: &str) -> Result<bool
         }
     }
     Ok(false)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn kernel_capabilities_require_builtin_virtiofs_for_root_boot() {
+        let config = HashMap::from([
+            ("CONFIG_FUSE_FS".to_string(), "y".to_string()),
+            ("CONFIG_VIRTIO_FS".to_string(), "m".to_string()),
+            ("CONFIG_VIRTIO_BLK".to_string(), "y".to_string()),
+            ("CONFIG_VSOCKETS".to_string(), "y".to_string()),
+        ]);
+
+        let caps = kernel_capabilities_from_config(&config);
+        assert!(caps.has_virtiofs);
+        assert!(!caps.can_boot_virtiofs_root);
+    }
+
+    #[test]
+    fn kernel_capabilities_allow_builtin_virtiofs_root_boot() {
+        let config = HashMap::from([
+            ("CONFIG_FUSE_FS".to_string(), "y".to_string()),
+            ("CONFIG_VIRTIO_FS".to_string(), "y".to_string()),
+            ("CONFIG_VIRTIO_BLK".to_string(), "y".to_string()),
+            ("CONFIG_VSOCKETS".to_string(), "y".to_string()),
+        ]);
+
+        let caps = kernel_capabilities_from_config(&config);
+        assert!(caps.can_boot_virtiofs_root);
+    }
+
+    #[test]
+    fn kernel_supports_virtiofs_root_rejects_unknown_host_kernel() {
+        let tmp = tempfile::tempdir().unwrap();
+        let manager = KernelManager::new(tmp.path());
+        let kernel = tmp.path().join("vmlinux-host-unknown");
+        std::fs::write(&kernel, b"kernel").unwrap();
+
+        assert!(!manager.kernel_supports_virtiofs_root(&kernel));
+    }
+
+    #[test]
+    fn kernel_supports_virtiofs_root_accepts_unknown_chvm_kernel() {
+        let tmp = tempfile::tempdir().unwrap();
+        let manager = KernelManager::new(tmp.path());
+        let kernel = tmp.path().join("vmlinux-chvm-unknown");
+        std::fs::write(&kernel, b"kernel").unwrap();
+
+        assert!(manager.kernel_supports_virtiofs_root(&kernel));
+    }
 }

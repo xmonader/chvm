@@ -19,6 +19,7 @@ impl StorageBackend for BlockStorage {
                 &block_path,
                 Path::new(&config.rootfs_path),
                 config.inject_mycelium,
+                config.block_disk_size_bytes,
             )?;
         }
 
@@ -27,6 +28,7 @@ impl StorageBackend for BlockStorage {
             socket_path: None,
             virtiofs_pid: None,
             overlay_dir: None,
+            overlay_backing_dir: None,
         })
     }
 

@@ -29,6 +29,12 @@ pub struct Config {
     #[serde(default = "default_storage_backend")]
     pub default_storage_backend: String,
 
+    #[serde(default)]
+    pub default_block_disk_size_mb: Option<u64>,
+
+    #[serde(default)]
+    pub default_virtiofs_quota_mb: Option<u64>,
+
     #[serde(default = "default_bridge")]
     pub default_bridge: String,
 
@@ -72,6 +78,8 @@ impl Default for Config {
             cloud_hypervisor_bin: None,
             default_network_mode: default_network_mode(),
             default_storage_backend: default_storage_backend(),
+            default_block_disk_size_mb: None,
+            default_virtiofs_quota_mb: None,
             default_bridge: default_bridge(),
             default_mycelium_peers: default_mycelium_peers(),
         }
@@ -112,6 +120,8 @@ mod tests {
         assert_eq!(config.default_memory_mb, 512);
         assert_eq!(config.default_network_mode, "mycelium");
         assert_eq!(config.default_storage_backend, "virtiofs");
+        assert_eq!(config.default_block_disk_size_mb, None);
+        assert_eq!(config.default_virtiofs_quota_mb, None);
         assert_eq!(config.default_bridge, "chvm0");
         assert!(config.kernel_path.is_none());
         assert!(config.virtiofsd_bin.is_none());
@@ -163,6 +173,8 @@ mod tests {
             cloud_hypervisor_bin: None,
             default_network_mode: "mycelium".to_string(),
             default_storage_backend: "virtiofs".to_string(),
+            default_block_disk_size_mb: Some(2048),
+            default_virtiofs_quota_mb: Some(4096),
             default_bridge: "testbr0".to_string(),
             default_mycelium_peers: default_mycelium_peers(),
         };

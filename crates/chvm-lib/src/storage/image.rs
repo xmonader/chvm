@@ -41,26 +41,17 @@ impl Drop for MountGuard {
     }
 }
 
-/// Create an ext4 block image from a rootfs directory.
-pub fn create_ext4_image(
+pub(crate) fn create_empty_ext4_image(
     image_path: &Path,
-    rootfs_path: &Path,
-    inject_mycelium: bool,
+    size: u64,
+    label: &str,
 ) -> anyhow::Result<()> {
-    // Calculate size needed
-    let size = calculate_dir_size(rootfs_path)?;
-    let size = std::cmp::max((size as f64 * IMAGE_SIZE_OVERHEAD) as u64, MIN_IMAGE_SIZE);
-
-    info!(image = %image_path.display(), size = size, "Creating ext4 block image");
-
-    // Create sparse file
     let f = std::fs::File::create(image_path)?;
     f.set_len(size)?;
     drop(f);
 
-    // Format as ext4
     let output = Command::new("mkfs.ext4")
-        .args(["-F", "-L", "rootfs"])
+        .args(["-F", "-L", label])
         .arg(image_path)
         .output()?;
     if !output.status.success() {
@@ -69,6 +60,46 @@ pub fn create_ext4_image(
             String::from_utf8_lossy(&output.stderr)
         );
     }
+
+    Ok(())
+}
+
+fn required_ext4_image_size(rootfs_path: &Path) -> anyhow::Result<u64> {
+    let size = calculate_dir_size(rootfs_path)?;
+    Ok(std::cmp::max(
+        (size as f64 * IMAGE_SIZE_OVERHEAD) as u64,
+        MIN_IMAGE_SIZE,
+    ))
+}
+
+pub(crate) fn resolve_ext4_image_size(
+    rootfs_path: &Path,
+    requested_size: Option<u64>,
+) -> anyhow::Result<u64> {
+    let required_size = required_ext4_image_size(rootfs_path)?;
+    match requested_size {
+        Some(size) if size < required_size => anyhow::bail!(
+            "requested disk size {} bytes is too small; need at least {} bytes",
+            size,
+            required_size
+        ),
+        Some(size) => Ok(size),
+        None => Ok(required_size),
+    }
+}
+
+/// Create an ext4 block image from a rootfs directory.
+pub fn create_ext4_image(
+    image_path: &Path,
+    rootfs_path: &Path,
+    inject_mycelium: bool,
+    requested_size: Option<u64>,
+) -> anyhow::Result<()> {
+    let size = resolve_ext4_image_size(rootfs_path, requested_size)?;
+
+    info!(image = %image_path.display(), size = size, "Creating ext4 block image");
+
+    create_empty_ext4_image(image_path, size, "rootfs")?;
 
     // Mount and copy rootfs
     let mount_point = image_path.with_extension("mnt");

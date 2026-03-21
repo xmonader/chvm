@@ -3,7 +3,9 @@ use std::process::{Command, Stdio};
 
 use tracing::info;
 
-use crate::storage::image::{inject_busybox_ip_tools, inject_runtime_binaries};
+use crate::storage::image::{
+    create_empty_ext4_image, inject_binary, inject_busybox_ip_tools, inject_runtime_binaries,
+};
 use crate::storage::traits::*;
 
 /// Virtio-FS storage backend using virtiofsd.
@@ -21,13 +23,44 @@ impl StorageBackend for VirtioFsStorage {
 
         // Set up overlay filesystem
         let overlay_dir = storage_dir.join("overlay");
-        let upper_dir = overlay_dir.join("upper");
-        let work_dir = overlay_dir.join("work");
+        let quota_backing_dir = overlay_dir.join("quota-backing");
+        let quota_backing_img = overlay_dir.join("quota-backing.img");
         let merged_dir = overlay_dir.join("merged");
-
-        std::fs::create_dir_all(&upper_dir)?;
-        std::fs::create_dir_all(&work_dir)?;
         std::fs::create_dir_all(&merged_dir)?;
+
+        let (upper_dir, work_dir, overlay_backing_dir) =
+            if let Some(quota_bytes) = config.writable_quota_bytes {
+                std::fs::create_dir_all(&quota_backing_dir)?;
+                create_empty_ext4_image(&quota_backing_img, quota_bytes, "chvm-upper")?;
+
+                let output = Command::new("mount")
+                    .args(["-o", "loop"])
+                    .arg(&quota_backing_img)
+                    .arg(&quota_backing_dir)
+                    .output()?;
+                if !output.status.success() {
+                    anyhow::bail!(
+                        "quota backing mount failed: {}",
+                        String::from_utf8_lossy(&output.stderr)
+                    );
+                }
+
+                let upper_dir = quota_backing_dir.join("upper");
+                let work_dir = quota_backing_dir.join("work");
+                std::fs::create_dir_all(&upper_dir)?;
+                std::fs::create_dir_all(&work_dir)?;
+                (
+                    upper_dir,
+                    work_dir,
+                    Some(quota_backing_dir.to_string_lossy().to_string()),
+                )
+            } else {
+                let upper_dir = overlay_dir.join("upper");
+                let work_dir = overlay_dir.join("work");
+                std::fs::create_dir_all(&upper_dir)?;
+                std::fs::create_dir_all(&work_dir)?;
+                (upper_dir, work_dir, None)
+            };
 
         // Mount overlay
         let overlay_opts = format!(
@@ -43,6 +76,9 @@ impl StorageBackend for VirtioFsStorage {
             .output()?;
 
         if !output.status.success() {
+            if overlay_backing_dir.is_some() {
+                let _ = Command::new("umount").arg(&quota_backing_dir).output();
+            }
             anyhow::bail!(
                 "overlay mount failed: {}",
                 String::from_utf8_lossy(&output.stderr)
@@ -52,6 +88,18 @@ impl StorageBackend for VirtioFsStorage {
         if config.inject_runtime_binaries {
             inject_runtime_binaries(Path::new(&merged_dir), config.inject_mycelium);
             inject_busybox_ip_tools(Path::new(&merged_dir));
+        } else if config.inject_mycelium {
+            inject_binary(
+                Path::new(&merged_dir),
+                "usr/bin/mycelium",
+                "mycelium",
+                &[
+                    "./bin/mycelium",
+                    "/usr/local/bin/mycelium",
+                    "/usr/bin/mycelium",
+                ],
+                Some(".chvm/bin/mycelium"),
+            );
         }
 
         // Start virtiofsd
@@ -61,6 +109,9 @@ impl StorageBackend for VirtioFsStorage {
             Err(e) => {
                 // Unmount overlay before returning error
                 let _ = Command::new("umount").arg(&merged_dir).output();
+                if overlay_backing_dir.is_some() {
+                    let _ = Command::new("umount").arg(&quota_backing_dir).output();
+                }
                 return Err(e);
             }
         };
@@ -79,6 +130,9 @@ impl StorageBackend for VirtioFsStorage {
             Err(e) => {
                 // Unmount overlay before returning error
                 let _ = Command::new("umount").arg(&merged_dir).output();
+                if overlay_backing_dir.is_some() {
+                    let _ = Command::new("umount").arg(&quota_backing_dir).output();
+                }
                 return Err(e.into());
             }
         };
@@ -94,10 +148,14 @@ impl StorageBackend for VirtioFsStorage {
                     socket_path: Some(socket_path.to_string_lossy().to_string()),
                     virtiofs_pid: Some(pid),
                     overlay_dir: Some(overlay_dir.to_string_lossy().to_string()),
+                    overlay_backing_dir,
                 });
             }
             if let Some(status) = child.try_wait()? {
                 let _ = Command::new("umount").arg(&merged_dir).output();
+                if overlay_backing_dir.is_some() {
+                    let _ = Command::new("umount").arg(&quota_backing_dir).output();
+                }
                 anyhow::bail!("virtiofsd exited before socket became ready: {status}");
             }
             tokio::time::sleep(std::time::Duration::from_millis(100)).await;
@@ -106,6 +164,9 @@ impl StorageBackend for VirtioFsStorage {
         let _ = child.kill();
         let _ = child.wait();
         let _ = Command::new("umount").arg(&merged_dir).output();
+        if overlay_backing_dir.is_some() {
+            let _ = Command::new("umount").arg(&quota_backing_dir).output();
+        }
         anyhow::bail!(
             "virtiofsd socket did not become ready: {}",
             socket_path.display()

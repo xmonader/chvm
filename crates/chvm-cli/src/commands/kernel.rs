@@ -97,6 +97,14 @@ pub fn execute(args: &KernelArgs) -> anyhow::Result<()> {
                         if caps.has_virtiofs { "yes" } else { "no" }
                     );
                     println!(
+                        "  VirtioFS root:{}",
+                        if caps.can_boot_virtiofs_root {
+                            " yes"
+                        } else {
+                            " no"
+                        }
+                    );
+                    println!(
                         "  VirtioBlock:  {}",
                         if caps.has_virtio_block { "yes" } else { "no" }
                     );

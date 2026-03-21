@@ -193,6 +193,8 @@ mod tests {
                 source: "/rootfs.sock".into(),
                 rootfs_type,
                 read_only: false,
+                block_disk_size_bytes: None,
+                writable_quota_bytes: None,
             },
             network: NetworkConfig {
                 mode: crate::vm::state::NetworkMode::None,
