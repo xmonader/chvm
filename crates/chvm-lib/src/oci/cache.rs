@@ -11,10 +11,10 @@ use crate::oci::image_config::ImageConfig;
 use crate::oci::layer;
 use crate::oci::pull::PullResult;
 use crate::oci::registry::sanitize_digest;
-use crate::storage::image::inject_runtime_binaries;
+use crate::storage::image::inject_guest_bootstrap;
 use crate::utils::{atomic_write, FileLock};
 
-const PREPARED_ROOTFS_VERSION: &str = "v1";
+const PREPARED_ROOTFS_VERSION: &str = "v2";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CacheIndex {
@@ -281,7 +281,7 @@ impl ImageCache {
                 "failed to copy rootfs into prepared cache {variant}: {e}"
             ))
         })?;
-        inject_runtime_binaries(&temp_dir, inject_mycelium);
+        inject_guest_bootstrap(&temp_dir, inject_mycelium);
 
         std::fs::rename(&temp_dir, &prepared_dir)?;
         self.record_prepared_rootfs_path(&digest, &variant, &prepared_dir)?;

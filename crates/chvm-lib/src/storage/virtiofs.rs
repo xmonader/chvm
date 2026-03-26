@@ -3,9 +3,7 @@ use std::process::{Command, Stdio};
 
 use tracing::info;
 
-use crate::storage::image::{
-    create_empty_ext4_image, inject_binary, inject_busybox_ip_tools, inject_runtime_binaries,
-};
+use crate::storage::image::{create_empty_ext4_image, inject_binary, inject_guest_bootstrap};
 use crate::storage::traits::*;
 
 /// Virtio-FS storage backend using virtiofsd.
@@ -86,8 +84,7 @@ impl StorageBackend for VirtioFsStorage {
         }
 
         if config.inject_runtime_binaries {
-            inject_runtime_binaries(Path::new(&merged_dir), config.inject_mycelium);
-            inject_busybox_ip_tools(Path::new(&merged_dir));
+            inject_guest_bootstrap(Path::new(&merged_dir), config.inject_mycelium);
         } else if config.inject_mycelium {
             inject_binary(
                 Path::new(&merged_dir),

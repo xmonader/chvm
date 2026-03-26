@@ -135,10 +135,7 @@ pub fn create_ext4_image(
             anyhow::bail!("cp failed: {}", String::from_utf8_lossy(&cp_output.stderr));
         }
 
-        // Inject binaries and modules
-        inject_runtime_binaries(&mount_point, inject_mycelium);
-        inject_busybox_ip_tools(&mount_point);
-        inject_kernel_modules(&mount_point);
+        inject_guest_bootstrap(&mount_point, inject_mycelium);
 
         Ok(())
     })();
@@ -183,6 +180,12 @@ pub fn inject_runtime_binaries(rootfs_path: &Path, inject_mycelium: bool) {
             Some(".chvm/bin/mycelium"),
         );
     }
+}
+
+pub(crate) fn inject_guest_bootstrap(rootfs_path: &Path, inject_mycelium: bool) {
+    inject_runtime_binaries(rootfs_path, inject_mycelium);
+    inject_busybox_ip_tools(rootfs_path);
+    inject_kernel_modules(rootfs_path);
 }
 
 /// Search for a binary in the given paths and inject it into the mount point.
