@@ -51,12 +51,10 @@ pub async fn execute(args: &DoctorArgs) -> anyhow::Result<()> {
         .any(|p| which::which(p).is_ok() || std::path::Path::new(p).exists());
     if found {
         println!("OK");
+    } else if default_storage_backend == "virtiofs" {
+        println!("NOT FOUND (default virtiofs will fall back to block)");
     } else {
-        if default_storage_backend == "virtiofs" {
-            println!("NOT FOUND (default virtiofs will fall back to block)");
-        } else {
-            println!("NOT FOUND (optional, needed for virtiofs storage)");
-        }
+        println!("NOT FOUND (optional, needed for virtiofs storage)");
     }
 
     // Check kernel
@@ -87,13 +85,11 @@ pub async fn execute(args: &DoctorArgs) -> anyhow::Result<()> {
     print!("mkfs.ext4: ");
     if which::which("mkfs.ext4").is_ok() {
         println!("OK");
+    } else if default_storage_backend == "block" {
+        println!("NOT FOUND (required for default block storage)");
+        all_ok = false;
     } else {
-        if default_storage_backend == "block" {
-            println!("NOT FOUND (required for default block storage)");
-            all_ok = false;
-        } else {
-            println!("NOT FOUND (optional, needed for block storage)");
-        }
+        println!("NOT FOUND (optional, needed for block storage)");
     }
 
     // Check iptables
