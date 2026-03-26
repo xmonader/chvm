@@ -748,6 +748,7 @@ impl VmManager {
             self.resolve_kernel_path(opts.kernel_path.as_deref(), &net_mode.to_string())?;
         let storage_backend =
             self.select_storage_backend(opts.storage_backend.as_deref(), &kernel_path)?;
+        validate_storage_options(&storage_backend, opts)?;
         let storage_type = match storage_backend.as_str() {
             "virtiofs" => RootfsType::VirtioFs,
             "block" => RootfsType::VirtioBlock,
@@ -847,7 +848,7 @@ impl VmManager {
         let backend = choose_storage_backend(
             requested,
             &self.config.default_storage_backend,
-            requested.is_some() || self.can_use_virtiofs(Path::new(kernel_path)),
+            self.can_use_virtiofs(Path::new(kernel_path)),
         )?;
 
         if requested.is_none()
@@ -1260,12 +1261,37 @@ fn choose_storage_backend(
     default_backend: &str,
     virtiofs_available: bool,
 ) -> Result<String> {
-    match requested_backend.unwrap_or(default_backend) {
-        "block" => Ok("block".into()),
-        "virtiofs" if virtiofs_available => Ok("virtiofs".into()),
-        "virtiofs" => Ok("block".into()),
-        "auto" if virtiofs_available => Ok("virtiofs".into()),
-        "auto" => Ok("block".into()),
+    match requested_backend {
+        Some("block") => Ok("block".into()),
+        Some("virtiofs") if virtiofs_available => Ok("virtiofs".into()),
+        Some("virtiofs") => Err(ChvmError::ConfigError(
+            "virtiofs storage requested but unavailable for the selected kernel/host".into(),
+        )),
+        Some(other) => Err(ChvmError::ConfigError(format!(
+            "invalid storage backend: {other}"
+        ))),
+        None => match default_backend {
+            "block" => Ok("block".into()),
+            "virtiofs" if virtiofs_available => Ok("virtiofs".into()),
+            "virtiofs" => Ok("block".into()),
+            "auto" if virtiofs_available => Ok("virtiofs".into()),
+            "auto" => Ok("block".into()),
+            other => Err(ChvmError::ConfigError(format!(
+                "invalid storage backend: {other}"
+            ))),
+        },
+    }
+}
+
+fn validate_storage_options(storage_backend: &str, opts: &CreateOptions) -> Result<()> {
+    match storage_backend {
+        "block" if opts.writable_quota_bytes.is_some() => Err(ChvmError::ConfigError(
+            "--storage-quota can only be used with the virtiofs storage backend".into(),
+        )),
+        "virtiofs" if opts.block_disk_size_bytes.is_some() => Err(ChvmError::ConfigError(
+            "--disk-size can only be used with the block storage backend".into(),
+        )),
+        "block" | "virtiofs" => Ok(()),
         other => Err(ChvmError::ConfigError(format!(
             "invalid storage backend: {other}"
         ))),
@@ -1746,6 +1772,92 @@ mod tests {
     fn choose_storage_backend_preserves_explicit_virtiofs_request() {
         let backend = choose_storage_backend(Some("virtiofs"), "virtiofs", true).unwrap();
         assert_eq!(backend, "virtiofs");
+    }
+
+    #[test]
+    fn choose_storage_backend_rejects_explicit_virtiofs_request_when_unavailable() {
+        let err = choose_storage_backend(Some("virtiofs"), "virtiofs", false).unwrap_err();
+        assert!(err
+            .to_string()
+            .contains("virtiofs storage requested but unavailable"));
+    }
+
+    #[test]
+    fn build_vm_config_rejects_storage_quota_for_block_backend() {
+        let tmp = tempfile::tempdir().unwrap();
+        let paths = Paths::new(tmp.path().join("chvm"));
+        let manager = VmManager::new(Config::default(), paths).unwrap();
+        let vm_dir = tmp.path().join("vm");
+        let kernel_path = tmp.path().join("vmlinux-chvm-test");
+        std::fs::create_dir_all(&vm_dir).unwrap();
+        std::fs::write(&kernel_path, b"kernel").unwrap();
+
+        let opts = CreateOptions {
+            name: Some("vm".into()),
+            image_ref: Some("alpine:latest".into()),
+            rootfs_path: None,
+            vcpu: None,
+            memory_mb: None,
+            storage_backend: Some("block".into()),
+            block_disk_size_bytes: None,
+            writable_quota_bytes: Some(1024 * 1024),
+            network_mode: None,
+            port_forwards: vec![],
+            env: vec![],
+            cmd: vec![],
+            mounts: vec![],
+            kernel_path: Some(kernel_path.to_string_lossy().to_string()),
+            detach: false,
+            remove_after: false,
+            mycelium_peers: vec![],
+            credentials: None,
+        };
+
+        let err = manager
+            .build_vm_config("a1b2c3d4e5f6", "vm", &opts, "/rootfs".into(), None, &vm_dir)
+            .unwrap_err();
+        assert!(err
+            .to_string()
+            .contains("--storage-quota can only be used with the virtiofs storage backend"));
+    }
+
+    #[test]
+    fn build_vm_config_rejects_disk_size_for_virtiofs_backend() {
+        let tmp = tempfile::tempdir().unwrap();
+        let paths = Paths::new(tmp.path().join("chvm"));
+        let manager = VmManager::new(Config::default(), paths).unwrap();
+        let vm_dir = tmp.path().join("vm");
+        let kernel_path = tmp.path().join("vmlinux-chvm-test");
+        std::fs::create_dir_all(&vm_dir).unwrap();
+        std::fs::write(&kernel_path, b"kernel").unwrap();
+
+        let opts = CreateOptions {
+            name: Some("vm".into()),
+            image_ref: Some("alpine:latest".into()),
+            rootfs_path: None,
+            vcpu: None,
+            memory_mb: None,
+            storage_backend: Some("virtiofs".into()),
+            block_disk_size_bytes: Some(1024 * 1024),
+            writable_quota_bytes: None,
+            network_mode: None,
+            port_forwards: vec![],
+            env: vec![],
+            cmd: vec![],
+            mounts: vec![],
+            kernel_path: Some(kernel_path.to_string_lossy().to_string()),
+            detach: false,
+            remove_after: false,
+            mycelium_peers: vec![],
+            credentials: None,
+        };
+
+        let err = manager
+            .build_vm_config("a1b2c3d4e5f6", "vm", &opts, "/rootfs".into(), None, &vm_dir)
+            .unwrap_err();
+        assert!(err
+            .to_string()
+            .contains("--disk-size can only be used with the block storage backend"));
     }
 
     #[test]

@@ -208,6 +208,19 @@ impl VmBuilder {
 
         let mac = generate_mac();
 
+        let (block_disk_size_bytes, writable_quota_bytes) = match self.rootfs_type {
+            RootfsType::VirtioBlock => (
+                self.block_disk_size_bytes
+                    .or(config.default_block_disk_size_mb.map(|mb| mb * 1024 * 1024)),
+                None,
+            ),
+            RootfsType::VirtioFs => (
+                None,
+                self.writable_quota_bytes
+                    .or(config.default_virtiofs_quota_mb.map(|mb| mb * 1024 * 1024)),
+            ),
+        };
+
         VmConfig {
             id: self.id,
             name: self.name,
@@ -222,12 +235,8 @@ impl VmBuilder {
                 source: self.rootfs_source,
                 rootfs_type: self.rootfs_type,
                 read_only: false,
-                block_disk_size_bytes: self
-                    .block_disk_size_bytes
-                    .or(config.default_block_disk_size_mb.map(|mb| mb * 1024 * 1024)),
-                writable_quota_bytes: self
-                    .writable_quota_bytes
-                    .or(config.default_virtiofs_quota_mb.map(|mb| mb * 1024 * 1024)),
+                block_disk_size_bytes,
+                writable_quota_bytes,
             },
             network: NetworkConfig {
                 mode: network_mode,
@@ -538,6 +547,38 @@ mod tests {
         let vm_fs = builder_fs.build(&config);
         assert!(vm_fs.kernel.cmdline.contains("rootfs"));
         assert!(vm_fs.kernel.cmdline.contains("virtiofs"));
+    }
+
+    #[test]
+    fn test_vm_builder_only_persists_size_settings_for_selected_backend() {
+        let config = Config {
+            default_block_disk_size_mb: Some(2048),
+            default_virtiofs_quota_mb: Some(4096),
+            ..Config::default()
+        };
+
+        let vm_block = VmBuilder::new("id1".to_string(), "vm1".to_string())
+            .rootfs("/rootfs".to_string(), RootfsType::VirtioBlock)
+            .vsock_cid(3)
+            .state_dir("/state".to_string())
+            .log_path("/log".to_string())
+            .writable_quota_bytes(1234)
+            .build(&config);
+        assert_eq!(
+            vm_block.rootfs.block_disk_size_bytes,
+            Some(2048 * 1024 * 1024)
+        );
+        assert_eq!(vm_block.rootfs.writable_quota_bytes, None);
+
+        let vm_fs = VmBuilder::new("id2".to_string(), "vm2".to_string())
+            .rootfs("/rootfs".to_string(), RootfsType::VirtioFs)
+            .vsock_cid(4)
+            .state_dir("/state".to_string())
+            .log_path("/log".to_string())
+            .block_disk_size_bytes(5678)
+            .build(&config);
+        assert_eq!(vm_fs.rootfs.block_disk_size_bytes, None);
+        assert_eq!(vm_fs.rootfs.writable_quota_bytes, Some(4096 * 1024 * 1024));
     }
 
     #[test]

@@ -308,11 +308,6 @@ impl KernelManager {
 }
 
 fn extract_kernel_config(kernel_path: &Path) -> Option<HashMap<String, String>> {
-    // Try /proc/config.gz first
-    if let Ok(config) = read_proc_config() {
-        return Some(parse_kernel_config(&config));
-    }
-
     // Try embedded IKCONFIG
     let data = std::fs::read(kernel_path).ok()?;
     let magic_start = b"IKCFG_ST";
@@ -334,14 +329,6 @@ fn extract_kernel_config(kernel_path: &Path) -> Option<HashMap<String, String>> 
     decoder.read_to_string(&mut decompressed).ok()?;
 
     Some(parse_kernel_config(&decompressed))
-}
-
-fn read_proc_config() -> std::io::Result<String> {
-    let file = std::fs::File::open("/proc/config.gz")?;
-    let mut decoder = GzDecoder::new(file);
-    let mut data = String::new();
-    decoder.read_to_string(&mut data)?;
-    Ok(data)
 }
 
 fn parse_kernel_config(data: &str) -> HashMap<String, String> {
