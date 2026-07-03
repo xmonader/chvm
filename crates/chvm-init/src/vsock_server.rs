@@ -1,8 +1,15 @@
 // NOTE: Keep in sync with chvm-lib/src/vsock/protocol.rs
 // (chvm-init is a separate guest binary and can't depend on chvm-lib).
+use std::sync::atomic::{AtomicUsize, Ordering};
+
 const VSOCK_PORT_EXEC: u32 = 1024;
 const VSOCK_PORT_SHELL: u32 = 1025;
 const VSOCK_CID_ANY: u32 = 0xFFFFFFFF;
+
+/// Cap on concurrent handler threads so a connection flood can't exhaust guest
+/// memory by spawning unbounded threads. Shared across the exec/shell servers.
+const MAX_ACTIVE_HANDLERS: usize = 64;
+static ACTIVE_HANDLERS: AtomicUsize = AtomicUsize::new(0);
 
 /// Run a vsock server on the given port, dispatching connections to handler.
 fn run_server(port: u32, name: &str, handler: fn(i32)) {
@@ -26,9 +33,22 @@ fn run_server(port: u32, name: &str, handler: fn(i32)) {
             )
         };
         if conn_fd < 0 {
+            // Back off on error (e.g. EMFILE under fd exhaustion) instead of
+            // busy-spinning and pegging a CPU.
+            std::thread::sleep(std::time::Duration::from_millis(50));
             continue;
         }
-        std::thread::spawn(move || handler(conn_fd));
+        // Refuse the connection if too many handlers are already in flight.
+        if ACTIVE_HANDLERS.load(Ordering::Acquire) >= MAX_ACTIVE_HANDLERS {
+            eprintln!("[init] {name}: handler limit reached, dropping connection");
+            unsafe { libc::close(conn_fd) };
+            continue;
+        }
+        ACTIVE_HANDLERS.fetch_add(1, Ordering::AcqRel);
+        std::thread::spawn(move || {
+            handler(conn_fd);
+            ACTIVE_HANDLERS.fetch_sub(1, Ordering::AcqRel);
+        });
     }
 }
 
@@ -71,7 +91,7 @@ fn create_vsock_listener(port: u32) -> Result<i32, String> {
             ));
         }
 
-        if libc::listen(fd, 5) < 0 {
+        if libc::listen(fd, 32) < 0 {
             libc::close(fd);
             return Err(format!(
                 "listen() failed: {}",

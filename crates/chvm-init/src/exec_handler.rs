@@ -1,4 +1,4 @@
-use std::io::{BufRead, BufReader, Write};
+use std::io::{BufRead, BufReader, Read, Write};
 use std::os::unix::io::FromRawFd;
 use std::process::Command;
 use std::sync::{Arc, Mutex};
@@ -26,10 +26,11 @@ struct ExecResponse {
 
 pub fn handle_exec(fd: i32) {
     let file = unsafe { std::fs::File::from_raw_fd(fd) };
-    let mut reader = BufReader::new(&file);
     let mut writer = &file;
 
-    // Read request
+    // Read request, bounded so a client that never sends '\n' can't OOM PID 1.
+    const MAX_REQUEST_BYTES: u64 = 1 << 20; // 1 MiB
+    let mut reader = BufReader::new((&file).take(MAX_REQUEST_BYTES));
     let mut line = String::new();
     if reader.read_line(&mut line).is_err() {
         return;

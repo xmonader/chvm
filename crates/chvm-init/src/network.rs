@@ -217,7 +217,7 @@ fn parse_ipv4_cidr(cidr: &str) -> Result<(Ipv4Addr, Ipv4Addr), Box<dyn std::erro
 unsafe fn set_ifreq_sockaddr(
     sock: libc::c_int,
     ifname: &str,
-    request: libc::c_ulong,
+    request: libc::Ioctl,
     addr: Ipv4Addr,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let mut ifr = new_ifreq(ifname);
@@ -233,7 +233,7 @@ unsafe fn set_ifreq_sockaddr(
 unsafe fn get_ifreq_sockaddr(
     sock: libc::c_int,
     ifname: &str,
-    request: libc::c_ulong,
+    request: libc::Ioctl,
 ) -> Result<Ipv4Addr, Box<dyn std::error::Error>> {
     let mut ifr = new_ifreq(ifname);
 
@@ -256,7 +256,7 @@ unsafe fn add_default_route(
     route.rt_dst = sockaddr_from_ipv4(Ipv4Addr::UNSPECIFIED);
     route.rt_gateway = sockaddr_from_ipv4(gateway);
     route.rt_genmask = sockaddr_from_ipv4(Ipv4Addr::UNSPECIFIED);
-    route.rt_flags = (libc::RTF_UP | libc::RTF_GATEWAY) as u16;
+    route.rt_flags = libc::RTF_UP | libc::RTF_GATEWAY;
     route.rt_dev = ifname.as_ptr() as *mut libc::c_char;
 
     if libc::ioctl(sock, libc::SIOCADDRT as _, &route) != 0 {

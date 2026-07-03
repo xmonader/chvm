@@ -1,5 +1,9 @@
+use std::sync::Arc;
+
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt};
+use tokio::net::unix::OwnedWriteHalf;
 use tokio::net::UnixStream;
+use tokio::sync::Mutex;
 
 use crate::error::{ChvmError, Result};
 use crate::vm::manager::ExecOptions;
@@ -169,6 +173,28 @@ impl Drop for RawModeGuard {
     }
 }
 
+fn terminal_size() -> Option<(u16, u16)> {
+    unsafe {
+        let mut ws: libc::winsize = std::mem::zeroed();
+        if libc::ioctl(libc::STDIN_FILENO, libc::TIOCGWINSZ, &mut ws) != 0 {
+            return None;
+        }
+        if ws.ws_row == 0 || ws.ws_col == 0 {
+            return None;
+        }
+        Some((ws.ws_row, ws.ws_col))
+    }
+}
+
+async fn send_resize(writer: &Arc<Mutex<OwnedWriteHalf>>) -> std::io::Result<()> {
+    let Some((rows, cols)) = terminal_size() else {
+        return Ok(());
+    };
+    let msg = encode_resize(rows, cols);
+    let mut writer = writer.lock().await;
+    writer.write_all(&msg).await
+}
+
 /// Open an interactive shell session to a running VM.
 /// Detach with Ctrl+P, Ctrl+Q (same as Docker). Use a regular terminal, not IDE terminal.
 pub async fn interactive_session(vsock_path: &str) -> Result<i32> {
@@ -180,7 +206,10 @@ pub async fn interactive_session(vsock_path: &str) -> Result<i32> {
     let _raw_guard = RawModeGuard::enable();
 
     // Bidirectional proxy: stdin <-> vsock, vsock <-> stdout
-    let (mut reader, mut writer) = stream.into_split();
+    let (mut reader, writer) = stream.into_split();
+    let writer = Arc::new(Mutex::new(writer));
+
+    let _ = send_resize(&writer).await;
 
     let stdout_handle = tokio::spawn(async move {
         let mut buf = vec![0u8; 4096];
@@ -199,6 +228,23 @@ pub async fn interactive_session(vsock_path: &str) -> Result<i32> {
         }
     });
 
+    let resize_writer = writer.clone();
+    let resize_handle = tokio::spawn(async move {
+        #[cfg(unix)]
+        {
+            if let Ok(mut sigwinch) =
+                tokio::signal::unix::signal(tokio::signal::unix::SignalKind::window_change())
+            {
+                while sigwinch.recv().await.is_some() {
+                    if send_resize(&resize_writer).await.is_err() {
+                        break;
+                    }
+                }
+            }
+        }
+    });
+
+    let stdin_writer = writer.clone();
     let stdin_handle = tokio::spawn(async move {
         let mut buf = vec![0u8; 4096];
         let mut stdin = tokio::io::stdin();
@@ -216,7 +262,7 @@ pub async fn interactive_session(vsock_path: &str) -> Result<i32> {
                                 return;
                             }
                             // False alarm: send the buffered Ctrl+P, then this byte
-                            let _ = writer.write_all(&[0x10]).await;
+                            let _ = stdin_writer.lock().await.write_all(&[0x10]).await;
                             saw_ctrl_p = false;
                         }
 
@@ -232,7 +278,13 @@ pub async fn interactive_session(vsock_path: &str) -> Result<i32> {
                         while i < n && buf[i] != 0x10 {
                             i += 1;
                         }
-                        if writer.write_all(&buf[start..i]).await.is_err() {
+                        if stdin_writer
+                            .lock()
+                            .await
+                            .write_all(&buf[start..i])
+                            .await
+                            .is_err()
+                        {
                             return;
                         }
                     }
@@ -246,6 +298,8 @@ pub async fn interactive_session(vsock_path: &str) -> Result<i32> {
         r = stdout_handle => r,
         r = stdin_handle => r,
     };
+
+    resize_handle.abort();
 
     // _raw_guard is dropped here, restoring terminal settings
     Ok(0)
