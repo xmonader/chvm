@@ -481,9 +481,12 @@ impl VmManager {
             .await;
         }
 
-        // Confirm the process is actually gone; if it survived SIGKILL, mark
-        // Failed rather than Stopped so we don't rip resources from a live VM.
-        let died = !process_is_vm(state.vmm_pid, &api_socket);
+        // Confirm the process is actually gone. A SIGKILL is asynchronous — the
+        // kernel needs a moment to tear the process down and have it reaped — so
+        // poll briefly before declaring it stuck, otherwise we'd race the kill
+        // and wrongly mark a cleanly-killed VM as Failed.
+        let died =
+            wait_until_gone(state.vmm_pid, &api_socket, std::time::Duration::from_secs(5)).await;
 
         // Cleanup network
         if state.vm_config.network.mode != NetworkMode::None {
@@ -1635,18 +1638,27 @@ fn cleanup_virtiofs_state_dir(storage_dir: &Path) {
     }
 }
 
-async fn wait_for_exit(pid: i32, api_socket: &str, timeout: std::time::Duration) {
+/// Poll until the VM's process is gone, up to `timeout`. Returns true if it
+/// exited within the window, false if it is still alive.
+async fn wait_until_gone(pid: i32, api_socket: &str, timeout: std::time::Duration) -> bool {
     let deadline = tokio::time::Instant::now() + timeout;
     loop {
         if !process_is_vm(pid, api_socket) {
-            return;
+            return true;
         }
-        if tokio::time::Instant::now() > deadline {
-            kill_vm_process(pid, api_socket);
-            return;
+        if tokio::time::Instant::now() >= deadline {
+            return false;
         }
-        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
     }
+}
+
+/// Wait for a VM to exit gracefully; SIGKILL it if it doesn't within `timeout`.
+async fn wait_for_exit(pid: i32, api_socket: &str, timeout: std::time::Duration) {
+    if wait_until_gone(pid, api_socket, timeout).await {
+        return;
+    }
+    kill_vm_process(pid, api_socket);
 }
 
 #[cfg(test)]
