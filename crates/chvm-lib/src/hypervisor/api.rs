@@ -83,9 +83,18 @@ pub async fn vm_counters(socket_path: &str) -> Result<serde_json::Value> {
     Ok(counters)
 }
 
-/// Gracefully shutdown the VM.
+/// Gracefully shutdown the VM (powers off the guest but leaves the VMM process
+/// running so it can be rebooted). Use `vmm_shutdown` to also exit the process.
 pub async fn shutdown(socket_path: &str) -> Result<()> {
     api_request(socket_path, "PUT", "/api/v1/vm.shutdown", None).await?;
+    Ok(())
+}
+
+/// Shut down the whole cloud-hypervisor VMM, terminating the process. This is
+/// what `stop` wants: it powers off the guest and makes the process exit
+/// promptly instead of lingering until SIGKILL.
+pub async fn vmm_shutdown(socket_path: &str) -> Result<()> {
+    api_request(socket_path, "PUT", "/api/v1/vmm.shutdown", None).await?;
     Ok(())
 }
 

@@ -468,15 +468,16 @@ impl VmManager {
 
         if !process_is_vm(state.vmm_pid, &api_socket) {
             debug!(vm_id = %state.id, "VM process already exited");
-        } else if let Err(e) = hypervisor::api::shutdown(&api_socket).await {
-            warn!(error = %e, "Graceful shutdown failed, killing VM");
+        } else if let Err(e) = hypervisor::api::vmm_shutdown(&api_socket).await {
+            warn!(error = %e, "VMM shutdown request failed, killing VM");
             kill_vm_process(state.vmm_pid, &api_socket);
         } else {
-            // Wait for process to exit
+            // vmm.shutdown powers off the guest and exits the process; give it a
+            // short window to do so, then SIGKILL as a backstop.
             wait_for_exit(
                 state.vmm_pid,
                 &api_socket,
-                std::time::Duration::from_secs(30),
+                std::time::Duration::from_secs(10),
             )
             .await;
         }
