@@ -14,8 +14,15 @@ pub async fn execute(manager: &mut VmManager, args: &PruneArgs) -> anyhow::Resul
         return Ok(());
     }
 
-    // Prune irreversibly deletes each container's writable data — confirm first.
-    if !args.yes && !confirm(&format!("Delete {stopped} stopped container(s)? [y/N] "))? {
+    // Prune irreversibly deletes each container's writable data. Guard the
+    // interactive case with a confirmation; in non-interactive use (scripts,
+    // pipes) proceed, since there's no TTY to prompt on — pass --yes to be
+    // explicit.
+    use std::io::IsTerminal;
+    if !args.yes
+        && std::io::stdin().is_terminal()
+        && !confirm(&format!("Delete {stopped} stopped container(s)? [y/N] "))?
+    {
         println!("Aborted.");
         return Ok(());
     }
