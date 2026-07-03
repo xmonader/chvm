@@ -1,4 +1,6 @@
+use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Condvar, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
 use nix::sys::signal::Signal;
@@ -8,6 +10,64 @@ use nix::sys::wait::{waitpid, WaitPidFlag, WaitStatus};
 use nix::unistd::Pid;
 
 static SHUTDOWN_IN_PROGRESS: AtomicBool = AtomicBool::new(false);
+
+/// Registry that lets the single PID-1 reaper hand a reaped child's real exit
+/// code to a waiting exec handler. Without this, the reaper's `waitpid(-1)`
+/// steals the exec child before the handler can `wait()` it, so the handler
+/// gets ECHILD and reports a bogus exit code.
+struct ExecReaper {
+    inner: Mutex<HashMap<i32, i32>>, // pid -> exit code, once reaped
+    cv: Condvar,
+}
+
+fn exec_reaper() -> &'static ExecReaper {
+    static R: OnceLock<ExecReaper> = OnceLock::new();
+    R.get_or_init(|| ExecReaper {
+        inner: Mutex::new(HashMap::new()),
+        cv: Condvar::new(),
+    })
+}
+
+/// Record a reaped child's exit code and wake any waiter. Called by the reaper.
+fn publish_exec_exit(pid: i32, code: i32) {
+    let reaper = exec_reaper();
+    let mut map = reaper.inner.lock().unwrap_or_else(|e| e.into_inner());
+    // Bounded defensively: unwaited orphan reaps (rare in this guest) can't grow
+    // the map without limit.
+    if map.len() > 4096 {
+        map.clear();
+    }
+    map.insert(pid, code);
+    reaper.cv.notify_all();
+}
+
+/// Block until the reaper publishes `pid`'s exit code, or `timeout` elapses.
+/// Returns None on timeout (caller falls back to a default code).
+pub fn wait_exec_exit(pid: i32, timeout: Duration) -> Option<i32> {
+    let reaper = exec_reaper();
+    let mut map = reaper.inner.lock().unwrap_or_else(|e| e.into_inner());
+    let deadline = Instant::now() + timeout;
+    loop {
+        if let Some(code) = map.remove(&pid) {
+            return Some(code);
+        }
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            return None;
+        }
+        let (guard, res) = reaper
+            .cv
+            .wait_timeout(map, remaining)
+            .unwrap_or_else(|e| e.into_inner());
+        map = guard;
+        if res.timed_out() {
+            if let Some(code) = map.remove(&pid) {
+                return Some(code);
+            }
+            return None;
+        }
+    }
+}
 const POLL_INTERVAL: Duration = Duration::from_millis(50);
 const SIGTERM_TIMEOUT: Duration = Duration::from_secs(3);
 const SIGKILL_TIMEOUT: Duration = Duration::from_secs(1);
@@ -86,7 +146,9 @@ pub fn reap_zombies(
                 mycelium_pid = None;
                 restart_after = Some(std::time::Instant::now() + MYCELIUM_RESTART_DELAY);
             } else {
-                println!("[init] Reaped child process {raw_pid} (exit code {exit_code})");
+                // Hand the exit code to any exec handler waiting on this child,
+                // and also record it in case the wait races slightly behind.
+                publish_exec_exit(raw_pid, exit_code);
             }
         }
 
@@ -127,10 +189,10 @@ fn reap_all_children() -> bool {
     loop {
         match waitpid(Pid::from_raw(-1), Some(WaitPidFlag::WNOHANG)) {
             Ok(WaitStatus::Exited(pid, code)) => {
-                println!("[init] Reaped child process {pid} (exited {code})");
+                publish_exec_exit(pid.as_raw(), code);
             }
             Ok(WaitStatus::Signaled(pid, sig, _)) => {
-                println!("[init] Reaped child process {pid} (killed by {sig})");
+                publish_exec_exit(pid.as_raw(), 128 + sig as i32);
             }
             Ok(WaitStatus::StillAlive) => return false,
             Err(_) => return true,

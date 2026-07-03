@@ -21,14 +21,25 @@ pub struct ExecRequest {
     pub working_dir: Option<String>,
 }
 
-/// Response from executing a command.
-/// NOTE: Keep in sync with ExecResponse in chvm-init/src/exec_handler.rs
-#[derive(Debug, Serialize, Deserialize)]
-pub struct ExecResponse {
-    pub exit_code: i32,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub error: Option<String>,
-}
+/// Exec response framing (guest -> host).
+///
+/// Each frame is `[1 byte type][4 bytes big-endian u32 length][payload]`. This
+/// replaces the old line-based `OUTPUT:` / trailing-JSON protocol, which could
+/// not carry binary output (UTF-8 line splitting) and let output that happened
+/// to parse as JSON spoof the exit status. Now stdout/stderr bytes are relayed
+/// verbatim and the exit code is a dedicated typed frame.
+///
+/// NOTE: Keep these constants in sync with chvm-init/src/exec_handler.rs
+/// (chvm-init is a separate guest binary and can't depend on chvm-lib).
+pub const FRAME_STDOUT: u8 = 1;
+pub const FRAME_STDERR: u8 = 2;
+/// Terminal frame; payload is a 4-byte big-endian i32 exit code.
+pub const FRAME_EXIT: u8 = 3;
+/// Out-of-band error (e.g. failed to spawn); payload is a UTF-8 message.
+pub const FRAME_ERROR: u8 = 4;
+pub const FRAME_HEADER_LEN: usize = 5;
+/// Largest single-frame payload the host will accept, to bound allocation.
+pub const MAX_FRAME_PAYLOAD: usize = 16 * 1024 * 1024;
 
 /// In-band resize escape: \x01RSZ (SOH + "RSZ").
 /// NOTE: Keep in sync with RESIZE_MAGIC in chvm-init/src/shell_handler.rs

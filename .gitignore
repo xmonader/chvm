@@ -18,3 +18,6 @@ tests/results/
 
 # Runtime data (user-specific)
 .chvm/
+
+# Local runtime binary injection dir
+/bin/

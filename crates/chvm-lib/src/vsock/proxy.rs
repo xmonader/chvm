@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt};
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::unix::OwnedWriteHalf;
 use tokio::net::UnixStream;
 use tokio::sync::Mutex;
@@ -87,48 +87,68 @@ async fn exec_inner(
         .await
         .map_err(|e| ChvmError::VsockError(format!("failed to send request: {e}")))?;
 
-    let reader = tokio::io::BufReader::new(stream);
-    let mut lines = reader.lines();
+    let mut reader = tokio::io::BufReader::new(stream);
     let mut captured = String::new();
+    let mut stdout = tokio::io::stdout();
+    let mut stderr = tokio::io::stderr();
+    let mut header = [0u8; FRAME_HEADER_LEN];
 
-    while let Ok(Some(line)) = lines.next_line().await {
-        if let Some(content) = line.strip_prefix("OUTPUT:") {
-            match mode {
-                OutputMode::Print => println!("{content}"),
-                OutputMode::Capture => {
-                    if !captured.is_empty() {
-                        captured.push('\n');
-                    }
-                    captured.push_str(content);
+    loop {
+        // Read the fixed-size frame header. Clean EOF here means the connection
+        // closed before an EXIT frame — treat as a crashed guest.
+        if reader.read_exact(&mut header).await.is_err() {
+            let _ = stdout.flush().await;
+            return Err(ChvmError::VsockError(
+                "connection closed without receiving exit status (guest may have crashed)".into(),
+            ));
+        }
+        let frame_type = header[0];
+        let len = u32::from_be_bytes([header[1], header[2], header[3], header[4]]) as usize;
+        if len > MAX_FRAME_PAYLOAD {
+            return Err(ChvmError::VsockError(format!(
+                "exec frame too large ({len} bytes)"
+            )));
+        }
+        let mut payload = vec![0u8; len];
+        reader
+            .read_exact(&mut payload)
+            .await
+            .map_err(|e| ChvmError::VsockError(format!("truncated exec frame: {e}")))?;
+
+        match frame_type {
+            FRAME_STDOUT => match mode {
+                OutputMode::Print => {
+                    stdout.write_all(&payload).await.ok();
+                    stdout.flush().await.ok();
+                }
+                OutputMode::Capture => captured.push_str(&String::from_utf8_lossy(&payload)),
+            },
+            FRAME_STDERR => match mode {
+                OutputMode::Print => {
+                    stderr.write_all(&payload).await.ok();
+                    stderr.flush().await.ok();
+                }
+                OutputMode::Capture => captured.push_str(&String::from_utf8_lossy(&payload)),
+            },
+            FRAME_ERROR => {
+                let msg = String::from_utf8_lossy(&payload);
+                if let OutputMode::Print = mode {
+                    eprintln!("{msg}");
                 }
             }
-        } else {
-            match serde_json::from_str::<ExecResponse>(&line) {
-                Ok(resp) => {
-                    if let OutputMode::Print = mode {
-                        if let Some(ref err) = resp.error {
-                            eprintln!("{err}");
-                        }
-                    }
-                    return Ok((resp.exit_code, captured));
-                }
-                Err(_) => match mode {
-                    OutputMode::Print => print!("{line}"),
-                    OutputMode::Capture => {
-                        if !captured.is_empty() {
-                            captured.push('\n');
-                        }
-                        captured.push_str(&line);
-                    }
-                },
+            FRAME_EXIT => {
+                let code = if payload.len() == 4 {
+                    i32::from_be_bytes([payload[0], payload[1], payload[2], payload[3]])
+                } else {
+                    1
+                };
+                let _ = stdout.flush().await;
+                let _ = stderr.flush().await;
+                return Ok((code, captured));
             }
+            _ => { /* unknown frame type — ignore for forward compat */ }
         }
     }
-
-    // Stream ended without receiving an ExecResponse — connection dropped or guest crashed
-    Err(ChvmError::VsockError(
-        "connection closed without receiving exit status (guest may have crashed)".into(),
-    ))
 }
 
 /// Execute a command in a running VM and print output.
