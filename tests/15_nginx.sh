@@ -21,13 +21,19 @@ inspect_field() {
 # Helper: install nginx and configure it inside a running VM
 setup_nginx() {
     local vm_name="$1"
-    $CHVM exec "$vm_name" -- sh -c "\
-        apk add --no-cache nginx >/dev/null 2>&1 && \
-        mkdir -p /var/www /run/nginx && \
-        echo 'hello from chvm' > /var/www/index.html && \
-        printf 'server { listen 80; listen [::]:80; root /var/www; index index.html; }\n' \
-            > /etc/nginx/http.d/default.conf && \
-        nginx" 2>&1
+    local output=""
+    for attempt in 1 2 3; do
+        output=$($CHVM exec "$vm_name" -- sh -c "\
+            apk add --no-cache nginx >/dev/null 2>&1 && \
+            mkdir -p /var/www /run/nginx && \
+            echo 'hello from chvm' > /var/www/index.html && \
+            printf 'server { listen 80; listen [::]:80; root /var/www; index index.html; }\n' \
+                > /etc/nginx/http.d/default.conf && \
+            { pidof nginx >/dev/null 2>&1 && nginx -s reload || nginx; }" 2>&1) && return 0
+        sleep 5
+    done
+    printf '%s\n' "$output"
+    return 1
 }
 
 # ============================================================
@@ -52,7 +58,8 @@ sleep 5
 
 # Install and start nginx
 setup_output=$(setup_nginx "$PF_VM" 2>&1) || true
-if $CHVM exec "$PF_VM" -- pgrep nginx >/dev/null 2>&1; then
+nginx_check=$($CHVM exec "$PF_VM" -- wget -qO- -T 5 http://localhost/ 2>&1) || true
+if echo "$nginx_check" | grep -q "hello from chvm"; then
     pass "Nginx installed and running in port-forward VM"
 else
     fail "Nginx installed and running in port-forward VM" "nginx not running"
@@ -144,7 +151,8 @@ sleep 5
 
 # Install and start nginx on the mycelium VM
 setup_output=$(setup_nginx "$MYC_SERVER" 2>&1) || true
-if $CHVM exec "$MYC_SERVER" -- pgrep nginx >/dev/null 2>&1; then
+nginx_check=$($CHVM exec "$MYC_SERVER" -- wget -qO- -T 5 http://localhost/ 2>&1) || true
+if echo "$nginx_check" | grep -q "hello from chvm"; then
     pass "Nginx running in mycelium VM"
 else
     fail "Nginx running in mycelium VM" "nginx not running"

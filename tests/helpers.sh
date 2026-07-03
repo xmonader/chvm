@@ -4,7 +4,10 @@
 set -euo pipefail
 
 # Binary path (prefer release, fall back to debug)
-CHVM="${CHVM:-./target/release/chvm}"
+CHVM="${CHVM:-./target/x86_64-unknown-linux-musl/release/chvm}"
+if [ ! -x "$CHVM" ]; then
+    CHVM="./target/release/chvm"
+fi
 if [ ! -x "$CHVM" ]; then
     CHVM="./target/debug/chvm"
 fi

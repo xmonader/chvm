@@ -10,7 +10,14 @@ if {$vm_name eq ""} {
 }
 
 # Determine binary path
-set chvm "./target/release/chvm"
+if {[info exists ::env(CHVM)]} {
+    set chvm $::env(CHVM)
+} else {
+    set chvm "./target/x86_64-unknown-linux-musl/release/chvm"
+}
+if {![file executable $chvm]} {
+    set chvm "./target/release/chvm"
+}
 if {![file executable $chvm]} {
     set chvm "./target/debug/chvm"
 }

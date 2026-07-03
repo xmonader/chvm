@@ -50,7 +50,11 @@ if cargo --version >/dev/null 2>&1; then
         echo -e "${YELLOW}chvm-init (musl) build failed — guest init may not work${NC}"
     fi
 else
-    if [ -x "./target/release/chvm" ]; then
+    if [ -x "./target/x86_64-unknown-linux-musl/release/chvm" ]; then
+        export CHVM="./target/x86_64-unknown-linux-musl/release/chvm"
+        echo -e "${YELLOW}cargo not available — using existing musl binary${NC}"
+    elif [ -x "./target/release/chvm" ]; then
+        export CHVM="./target/release/chvm"
         echo -e "${YELLOW}cargo not available — using existing binaries${NC}"
     else
         echo -e "${RED}No cargo and no pre-built binary — aborting${NC}"
@@ -96,7 +100,8 @@ for suite in "$SCRIPT_DIR"/[0-9]*.sh "$SCRIPT_DIR"/[0-9]*.expect; do
 done
 
 # Final cleanup: remove any leftover test VMs
-CHVM="./target/release/chvm"
+CHVM="${CHVM:-./target/x86_64-unknown-linux-musl/release/chvm}"
+[ -x "$CHVM" ] || CHVM="./target/release/chvm"
 [ -x "$CHVM" ] || CHVM="./target/debug/chvm"
 $CHVM list --all 2>/dev/null | grep "test_" | awk '{print $2}' | xargs -r -I{} $CHVM rm -f {} 2>/dev/null || true
 

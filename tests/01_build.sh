@@ -19,12 +19,14 @@ else
 fi
 
 # 2. Binary exists
-if [ -x "./target/release/chvm" ]; then
+if [ -x "./target/x86_64-unknown-linux-musl/release/chvm" ]; then
+    pass "Binary target/x86_64-unknown-linux-musl/release/chvm exists and is executable"
+elif [ -x "./target/release/chvm" ]; then
     pass "Binary target/release/chvm exists and is executable"
 elif [ -x "./target/debug/chvm" ]; then
     pass "Binary target/debug/chvm exists and is executable"
 else
-    fail "No chvm binary found in target/release or target/debug"
+    fail "No chvm binary found in target/x86_64-unknown-linux-musl/release, target/release, or target/debug"
 fi
 
 # 3. chvm --help exits 0 and contains expected content
