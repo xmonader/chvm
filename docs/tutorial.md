@@ -15,7 +15,7 @@ You need a Linux system with:
 Clone and build the project:
 
 ```bash
-git clone https://github.com/geomind/chvm.git
+git clone https://github.com/xmonader/chvm.git
 cd chvm
 
 # Install musl target (one-time)

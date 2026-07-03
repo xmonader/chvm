@@ -33,7 +33,7 @@ chvm lets you pull OCI container images and run them as hardware-isolated virtua
 ### From Source
 
 ```bash
-git clone https://github.com/geomind/chvm.git
+git clone https://github.com/xmonader/chvm.git
 cd chvm
 
 # Install musl target (one-time)
