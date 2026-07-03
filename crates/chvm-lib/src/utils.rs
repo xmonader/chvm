@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use nix::fcntl::{Flock, FlockArg};
-use tracing::debug;
+use tracing::warn;
 
 /// A file lock guard that releases the lock when dropped.
 /// Uses flock() for advisory locking.
@@ -97,14 +97,14 @@ pub fn run_cmd(cmd: &str, args: &[&str]) -> anyhow::Result<()> {
 pub fn run_best_effort(cmd: &str, args: &[&str], context: &str) {
     match Command::new(cmd).args(args).output() {
         Ok(output) if !output.status.success() => {
-            debug!(
+            warn!(
                 context = context,
                 stderr = %String::from_utf8_lossy(&output.stderr).trim(),
                 "Best-effort command failed"
             );
         }
         Err(e) => {
-            debug!(context = context, error = %e, "Best-effort command failed to execute");
+            warn!(context = context, error = %e, "Best-effort command failed to execute");
         }
         _ => {}
     }

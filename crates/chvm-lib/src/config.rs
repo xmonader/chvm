@@ -4,6 +4,7 @@ use std::path::{Path, PathBuf};
 use crate::paths::Paths;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Config {
     #[serde(default = "default_base_dir")]
     pub base_dir: PathBuf,
@@ -90,16 +91,39 @@ impl Config {
     pub fn load(path: &Path) -> anyhow::Result<Self> {
         if path.exists() {
             let data = std::fs::read_to_string(path)?;
-            let cfg: Config = serde_json::from_str(&data)?;
+            let cfg: Config = serde_json::from_str(&data).map_err(|e| {
+                anyhow::anyhow!(
+                    "config at {} is invalid ({e}); fix or delete it",
+                    path.display()
+                )
+            })?;
+            cfg.validate()?;
             Ok(cfg)
         } else {
             Ok(Config::default())
         }
     }
 
+    /// Reject nonsensical values that would otherwise only fail later at VM boot.
+    fn validate(&self) -> anyhow::Result<()> {
+        if self.default_vcpu == 0 {
+            anyhow::bail!("default_vcpu must be >= 1");
+        }
+        if self.default_memory_mb == 0 {
+            anyhow::bail!("default_memory_mb must be >= 1");
+        }
+        match self.default_network_mode.as_str() {
+            "mycelium" | "tap" | "none" => {}
+            other => anyhow::bail!(
+                "invalid default_network_mode '{other}' (expected mycelium, tap, or none)"
+            ),
+        }
+        Ok(())
+    }
+
     pub fn save(&self, path: &Path) -> anyhow::Result<()> {
         let data = serde_json::to_string_pretty(self)?;
-        std::fs::write(path, data)?;
+        crate::utils::atomic_write(path, data.as_bytes())?;
         Ok(())
     }
 
