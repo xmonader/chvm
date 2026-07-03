@@ -139,6 +139,11 @@ pub async fn execute(args: &DoctorArgs) -> anyhow::Result<()> {
         gc_cleanup().await?;
     }
 
+    // Non-zero exit so `chvm doctor && deploy` doesn't proceed on a broken host.
+    if !all_ok {
+        std::process::exit(1);
+    }
+
     Ok(())
 }
 

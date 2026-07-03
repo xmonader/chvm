@@ -362,7 +362,11 @@ pub struct ImageRmArgs {
 }
 
 #[derive(clap::Args)]
-pub struct PruneArgs {}
+pub struct PruneArgs {
+    /// Skip the confirmation prompt
+    #[arg(short, long)]
+    pub yes: bool,
+}
 
 #[derive(clap::Args)]
 pub struct DoctorArgs {

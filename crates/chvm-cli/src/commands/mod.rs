@@ -139,12 +139,22 @@ impl CommonVmArgs for crate::cli::CreateArgs {
 }
 
 /// Truncate a string to max length, adding "..." if truncated.
+/// Uses char boundaries to avoid splitting multi-byte UTF-8 characters.
 pub fn truncate(s: &str, max: usize) -> String {
-    if s.len() > max {
-        format!("{}...", &s[..max - 3])
-    } else {
-        s.to_string()
+    if s.chars().count() <= max {
+        return s.to_string();
     }
+    if max <= 3 {
+        return ".".repeat(max);
+    }
+    // Find the byte index of the (max - 3)th character
+    let keep = max - 3;
+    let end = s
+        .char_indices()
+        .nth(keep)
+        .map(|(i, _)| i)
+        .unwrap_or(s.len());
+    format!("{}...", &s[..end])
 }
 
 /// Build CreateOptions from any args implementing CommonVmArgs.
