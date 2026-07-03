@@ -3,6 +3,7 @@ use std::process::Command;
 
 use tracing::info;
 
+use crate::error::Result;
 use crate::network::bridge;
 use crate::network::traits::*;
 use crate::utils::{run_best_effort, run_cmd};
@@ -39,10 +40,13 @@ impl NetworkBackend for TapNetwork {
         run_cmd("ip", &["link", "set", &tap_device, "up"])?;
 
         // Prefer the manager-assigned guest IP. Fall back to local discovery only if absent.
-        let ip_address = config.ip_address.clone().unwrap_or_else(|| {
-            let instance_num = find_unused_ip(bridge_name);
-            format!("{}.{}/24", bridge::SUBNET_PREFIX, instance_num)
-        });
+        let ip_address = match config.ip_address.clone() {
+            Some(ip) => ip,
+            None => {
+                let instance_num = find_unused_ip(bridge_name)?;
+                format!("{}.{}/24", bridge::SUBNET_PREFIX, instance_num)
+            }
+        };
         let gateway = config
             .gateway
             .clone()
@@ -89,16 +93,17 @@ impl NetworkBackend for TapNetwork {
 
 /// Find the first unused IP address in the subnet (2-254).
 /// Parses IPs currently assigned to TAPs on the bridge to avoid collisions.
-fn find_unused_ip(bridge: &str) -> u16 {
+fn find_unused_ip(bridge: &str) -> Result<u16> {
     let used = get_used_ips(bridge);
     // .1 is the gateway, start from .2
     for i in 2u16..255 {
         if !used.contains(&i) {
-            return i;
+            return Ok(i);
         }
     }
-    // Fallback (subnet exhausted) — return 2, will likely fail at runtime
-    2
+    Err(crate::error::ChvmError::NetworkError(format!(
+        "no free IP in subnet for bridge {bridge}"
+    )))
 }
 
 /// Get the set of IP last-octet values currently in use on TAPs attached to the bridge.
@@ -338,7 +343,7 @@ mod tests {
         let mut used_with_gateway = used.clone();
         used_with_gateway.insert(1);
 
-        let ip = find_unused_ip("nonexistent-bridge");
+        let ip = find_unused_ip("nonexistent-bridge").unwrap();
         assert!((2..255).contains(&ip));
     }
 
