@@ -1879,7 +1879,16 @@ mod tests {
     fn build_vm_config_uses_default_mycelium_peers_for_default_network_mode() {
         let tmp = tempfile::tempdir().unwrap();
         let paths = Paths::new(tmp.path().join("chvm"));
-        let manager = VmManager::new(Config::default(), paths).unwrap();
+        // Point virtiofsd at an existing dummy so the virtiofs backend is
+        // deterministically "available" regardless of what's installed on the
+        // test runner (CI has no virtiofsd).
+        let virtiofsd = tmp.path().join("virtiofsd");
+        std::fs::write(&virtiofsd, b"dummy").unwrap();
+        let config = Config {
+            virtiofsd_bin: Some(virtiofsd.to_string_lossy().to_string()),
+            ..Config::default()
+        };
+        let manager = VmManager::new(config, paths).unwrap();
         let vm_dir = tmp.path().join("vm");
         let kernel_path = tmp.path().join("vmlinux-chvm-test");
         std::fs::create_dir_all(&vm_dir).unwrap();
@@ -1981,7 +1990,15 @@ mod tests {
     fn build_vm_config_rejects_disk_size_for_virtiofs_backend() {
         let tmp = tempfile::tempdir().unwrap();
         let paths = Paths::new(tmp.path().join("chvm"));
-        let manager = VmManager::new(Config::default(), paths).unwrap();
+        // Force virtiofs availability so the backend resolves to virtiofs even
+        // where virtiofsd isn't installed (CI).
+        let virtiofsd = tmp.path().join("virtiofsd");
+        std::fs::write(&virtiofsd, b"dummy").unwrap();
+        let config = Config {
+            virtiofsd_bin: Some(virtiofsd.to_string_lossy().to_string()),
+            ..Config::default()
+        };
+        let manager = VmManager::new(config, paths).unwrap();
         let vm_dir = tmp.path().join("vm");
         let kernel_path = tmp.path().join("vmlinux-chvm-test");
         std::fs::create_dir_all(&vm_dir).unwrap();
