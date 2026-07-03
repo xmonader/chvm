@@ -605,6 +605,18 @@ pub struct StorageState {
     pub overlay_backing_dir: Option<String>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct NetworkOwnership {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tap_device: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bridge: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ip_address: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub iptables_rules: Vec<String>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RuntimeState {
     pub id: String,
@@ -622,6 +634,8 @@ pub struct RuntimeState {
     pub network_state: Option<NetworkState>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub storage_state: Option<StorageState>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub network_ownership: Option<NetworkOwnership>,
     pub created_at: DateTime<Utc>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub started_at: Option<DateTime<Utc>>,

@@ -55,11 +55,31 @@ impl StateStore {
                 continue;
             }
             let vm_id = entry.file_name().to_string_lossy().to_string();
+            // Skip internal directories (e.g. the `.locks` dir) which are not VMs.
+            if vm_id.starts_with('.') {
+                continue;
+            }
             if let Ok(state) = self.load_state(&vm_id) {
                 self.states.insert(vm_id, state);
             }
         }
         Ok(())
+    }
+
+    /// Acquire an exclusive lock covering a whole lifecycle operation (start,
+    /// stop, remove) on a single VM. Lives outside the per-VM directory so it
+    /// survives `delete()` removing that directory.
+    pub fn op_lock(&self, vm_id: &str) -> Result<FileLock> {
+        let locks_dir = self.state_dir.join(".locks");
+        std::fs::create_dir_all(&locks_dir)?;
+        Ok(FileLock::exclusive(&locks_dir.join(vm_id))?)
+    }
+
+    /// Acquire the global creation lock, serializing the name/ID uniqueness
+    /// check with the subsequent save so concurrent creates can't collide.
+    pub fn global_lock(&self) -> Result<FileLock> {
+        std::fs::create_dir_all(&self.state_dir)?;
+        Ok(FileLock::exclusive(&self.state_dir.join(".global"))?)
     }
 
     fn load_state(&self, vm_id: &str) -> Result<RuntimeState> {
@@ -160,6 +180,9 @@ impl StateStore {
     }
 
     pub fn delete(&mut self, vm_id: &str) -> Result<()> {
+        // Hold the state-file lock so a concurrent save() can't recreate the
+        // directory we are removing.
+        let _lock = FileLock::exclusive(&self.state_path(vm_id))?;
         let vm_dir = self.vm_dir(vm_id);
         if vm_dir.exists() {
             std::fs::remove_dir_all(&vm_dir)?;
@@ -287,6 +310,7 @@ impl VmManager {
         let vm_id = uuid::Uuid::new_v4().simple().to_string()[..12].to_string();
         let name = opts.name.clone().unwrap_or_else(|| vm_id.clone());
 
+        // Early best-effort check for a friendlier error before the (slow) pull.
         if self.state_store.exists_by_name(&name) {
             return Err(ChvmError::VmAlreadyExists(name));
         }
@@ -301,6 +325,19 @@ impl VmManager {
         let vm_config =
             self.build_vm_config(&vm_id, &name, &opts, rootfs_path, image_config, &vm_dir)?;
 
+        // Serialize the authoritative name/ID uniqueness check with the save so
+        // two concurrent `create --name X` can't both succeed.
+        let _global = self.state_store.global_lock()?;
+        self.state_store.reload()?;
+        if self.state_store.exists_by_name(&name) {
+            let _ = std::fs::remove_dir_all(&vm_dir);
+            return Err(ChvmError::VmAlreadyExists(name));
+        }
+        if self.state_store.get(&vm_id).is_ok() {
+            let _ = std::fs::remove_dir_all(&vm_dir);
+            return Err(ChvmError::VmAlreadyExists(vm_id));
+        }
+
         let state = RuntimeState {
             id: vm_id,
             name,
@@ -312,6 +349,7 @@ impl VmManager {
             exit_code: None,
             network_state: None,
             storage_state: None,
+            network_ownership: None,
             created_at: Utc::now(),
             started_at: None,
             stopped_at: None,
@@ -324,13 +362,21 @@ impl VmManager {
 
     /// Start a created VM.
     pub async fn start(&mut self, id_or_name: &str) -> Result<()> {
-        let mut state = self.state_store.resolve_clone(id_or_name)?;
+        let vm_id = self.state_store.resolve(id_or_name)?.id.clone();
+        // Hold the per-VM lock for the whole start so a concurrent start can't
+        // double-launch the hypervisor; re-read status from disk under the lock.
+        let _op = self.state_store.op_lock(&vm_id)?;
+        let mut state = self.state_store.resolve_clone(&vm_id)?;
 
         if state.status == VmState::Running {
             return Err(ChvmError::VmAlreadyRunning);
         }
 
         info!(vm_id = %state.id, "Starting VM");
+
+        // Rebuild the runtime kernel cmdline from the pristine base so repeated
+        // start/stop cycles don't accumulate stale/duplicate chvm.* parameters.
+        strip_runtime_cmdline_params(&mut state.vm_config.kernel.cmdline);
 
         let vm_dir = self.paths.vm_dir(&state.id);
         std::fs::create_dir_all(&vm_dir)?;
@@ -353,11 +399,13 @@ impl VmManager {
             state.vm_config.rootfs.source = sock.clone();
         }
 
-        // Setup network
+        // Setup network. A VM the user asked to be networked must not silently
+        // boot without it — fail the start and tear down partial resources.
         if state.vm_config.network.mode != NetworkMode::None {
-            match self.setup_network(&mut state, &vm_dir).await {
-                Ok(()) => {}
-                Err(e) => warn!(error = %e, "Failed to setup network, continuing without"),
+            if let Err(e) = self.setup_network(&mut state, &vm_dir).await {
+                let _ = self.teardown_network(&state).await;
+                self.cleanup_failed_start(&state, &vm_dir).await;
+                return Err(e);
             }
         }
 
@@ -396,30 +444,50 @@ impl VmManager {
 
     /// Stop a running VM.
     pub async fn stop(&mut self, id_or_name: &str) -> Result<()> {
-        let mut state = self.state_store.resolve_clone(id_or_name)?;
+        let vm_id = self.state_store.resolve(id_or_name)?.id.clone();
+        let _op = self.state_store.op_lock(&vm_id)?;
+        let mut state = self.state_store.resolve_clone(&vm_id)?;
 
         if state.status != VmState::Running {
             return Err(ChvmError::VmNotRunning);
         }
 
+        self.stop_running(&mut state).await
+    }
+
+    /// Stop the hypervisor and tear down resources for an already-resolved,
+    /// Running VM. Assumes the caller holds the per-VM op lock.
+    async fn stop_running(&mut self, state: &mut RuntimeState) -> Result<()> {
         info!(vm_id = %state.id, "Stopping VM");
 
         // Try graceful shutdown via API
-        let api_socket = state.vm_config.api_socket_path().unwrap_or_default();
+        let api_socket = state
+            .vm_config
+            .api_socket_path()
+            .ok_or_else(|| ChvmError::ProcessError("running VM has no API socket path".into()))?;
 
-        if !process_running(state.vmm_pid) {
+        if !process_is_vm(state.vmm_pid, &api_socket) {
             debug!(vm_id = %state.id, "VM process already exited");
         } else if let Err(e) = hypervisor::api::shutdown(&api_socket).await {
             warn!(error = %e, "Graceful shutdown failed, killing VM");
-            kill_process(state.vmm_pid);
+            kill_vm_process(state.vmm_pid, &api_socket);
         } else {
             // Wait for process to exit
-            wait_for_exit(state.vmm_pid, std::time::Duration::from_secs(30)).await;
+            wait_for_exit(
+                state.vmm_pid,
+                &api_socket,
+                std::time::Duration::from_secs(30),
+            )
+            .await;
         }
+
+        // Confirm the process is actually gone; if it survived SIGKILL, mark
+        // Failed rather than Stopped so we don't rip resources from a live VM.
+        let died = !process_is_vm(state.vmm_pid, &api_socket);
 
         // Cleanup network
         if state.vm_config.network.mode != NetworkMode::None {
-            if let Err(e) = self.teardown_network(&state).await {
+            if let Err(e) = self.teardown_network(state).await {
                 warn!(error = %e, "Failed to teardown network");
             }
         }
@@ -429,19 +497,32 @@ impl VmManager {
         self.cleanup_runtime_artifacts(&vm_dir);
 
         // Cleanup storage (virtiofsd processes, overlays)
-        self.cleanup_storage(&state);
+        self.cleanup_storage(state);
 
-        state.status = VmState::Stopped;
+        state.status = if died {
+            VmState::Stopped
+        } else {
+            VmState::Failed
+        };
         state.stopped_at = Some(Utc::now());
-        self.state_store.save(&state)?;
+        self.state_store.save(state)?;
 
-        info!(vm_id = %state.id, "VM stopped");
-        Ok(())
+        if died {
+            info!(vm_id = %state.id, "VM stopped");
+            Ok(())
+        } else {
+            Err(ChvmError::ProcessError(format!(
+                "VM {} did not exit after SIGKILL",
+                state.id
+            )))
+        }
     }
 
     /// Remove a VM.
     pub async fn remove(&mut self, id_or_name: &str, force: bool) -> Result<()> {
-        let state = self.state_store.resolve_clone(id_or_name)?;
+        let vm_id = self.state_store.resolve(id_or_name)?.id.clone();
+        let _op = self.state_store.op_lock(&vm_id)?;
+        let mut state = self.state_store.resolve_clone(&vm_id)?;
 
         if state.status == VmState::Running {
             if !force {
@@ -449,7 +530,7 @@ impl VmManager {
                     "VM is running, use --force to remove".into(),
                 ));
             }
-            self.stop(&state.id).await?;
+            self.stop_running(&mut state).await?;
         }
 
         // Always teardown network (idempotent — safe even if already torn down by stop())
@@ -539,7 +620,7 @@ impl VmManager {
 
         let counters = match crate::hypervisor::api::vm_counters(&socket_path).await {
             Ok(counters) => counters,
-            Err(_) if !process_running(state.vmm_pid) => {
+            Err(_) if !process_is_vm(state.vmm_pid, &socket_path) => {
                 self.refresh_status().await?;
                 return Err(ChvmError::VmNotRunning);
             }
@@ -557,10 +638,16 @@ impl VmManager {
             let Some(state) = self.state_store.states.get(&id).cloned() else {
                 continue;
             };
-            if state.status == VmState::Running
-                && state.vmm_pid > 0
-                && !process_running(state.vmm_pid)
-            {
+            // A VM is alive only if its PID still maps to a cloud-hypervisor
+            // whose cmdline carries this VM's unique api-socket path; a bare
+            // "cloud-hypervisor" match would false-positive on PID reuse.
+            let alive = state.vmm_pid > 0
+                && state
+                    .vm_config
+                    .api_socket_path()
+                    .map(|sock| process_is_vm(state.vmm_pid, &sock))
+                    .unwrap_or(false);
+            if state.status == VmState::Running && !alive {
                 info!(vm_id = %id, "Detected dead VM process, cleaning up resources");
 
                 if state.vm_config.network.mode != NetworkMode::None {
@@ -1436,27 +1523,30 @@ fn parse_if_inet6_output(output: &str, iface: &str) -> Option<String> {
     None
 }
 
-fn process_running(pid: i32) -> bool {
+/// Read `/proc/<pid>/cmdline` as a lossy string, or None if the pid is gone.
+fn read_proc_cmdline(pid: i32) -> Option<String> {
     if pid <= 0 {
-        return false;
+        return None;
     }
-    // Read /proc/<pid>/cmdline to verify it's actually cloud-hypervisor
-    let cmdline_path = format!("/proc/{}/cmdline", pid);
-    match std::fs::read(&cmdline_path) {
-        Ok(data) => {
-            let cmdline = String::from_utf8_lossy(&data);
-            cmdline.contains("cloud-hypervisor")
-        }
-        Err(_) => false,
+    std::fs::read(format!("/proc/{}/cmdline", pid))
+        .ok()
+        .map(|data| String::from_utf8_lossy(&data).into_owned())
+}
+
+/// True if `pid` is *this* VM's cloud-hypervisor, identified by its unique
+/// api-socket path in the cmdline. This defeats PID reuse: a recycled PID that
+/// happens to be a different VM's hypervisor won't match.
+fn process_is_vm(pid: i32, api_socket: &str) -> bool {
+    match read_proc_cmdline(pid) {
+        Some(cmdline) => cmdline.contains("cloud-hypervisor") && cmdline.contains(api_socket),
+        None => false,
     }
 }
 
-/// Kill a process, but only if it's actually a cloud-hypervisor instance.
-fn kill_process(pid: i32) {
-    if pid <= 0 {
-        return;
-    }
-    if !process_running(pid) {
+/// Kill a VM's hypervisor, but only if `pid` is still that exact VM's
+/// cloud-hypervisor (identified by its api-socket), never a recycled PID.
+fn kill_vm_process(pid: i32, api_socket: &str) {
+    if !process_is_vm(pid, api_socket) {
         return;
     }
     let _ = nix::sys::signal::kill(
@@ -1465,8 +1555,21 @@ fn kill_process(pid: i32) {
     );
 }
 
+/// Read `/proc/<pid>/comm` (the executable base name) if available.
+fn read_proc_comm(pid: i32) -> Option<String> {
+    std::fs::read_to_string(format!("/proc/{}/comm", pid))
+        .ok()
+        .map(|s| s.trim().to_string())
+}
+
+/// Kill a virtiofsd child, verifying both that its cmdline still contains the
+/// expected socket fragment AND that its executable is actually `virtiofsd`, so
+/// an operator's `tail`/`vim` on a matching path is never killed.
 fn kill_child_process(pid: i32) {
     if pid <= 0 {
+        return;
+    }
+    if read_proc_comm(pid).as_deref() != Some("virtiofsd") {
         return;
     }
     let _ = nix::sys::signal::kill(
@@ -1484,15 +1587,37 @@ fn kill_virtiofsd_by_fragment(fragment: &str) {
         let Ok(pid) = entry.file_name().to_string_lossy().parse::<i32>() else {
             continue;
         };
+        // Only consider processes whose executable is virtiofsd.
+        if read_proc_comm(pid).as_deref() != Some("virtiofsd") {
+            continue;
+        }
         let cmdline_path = entry.path().join("cmdline");
         let Ok(cmdline) = std::fs::read(&cmdline_path) else {
             continue;
         };
         let cmdline = String::from_utf8_lossy(&cmdline);
-        if cmdline.contains("virtiofsd") && cmdline.contains(fragment) {
+        if cmdline.contains(fragment) {
             kill_child_process(pid);
         }
     }
+}
+
+/// Remove runtime-injected `chvm.*` kernel parameters from a cmdline so that
+/// repeated start/stop cycles rebuild them fresh instead of accumulating stale,
+/// duplicated entries (e.g. an old `chvm.ip=` that now belongs to another VM).
+fn strip_runtime_cmdline_params(cmdline: &mut String) {
+    const RUNTIME_PREFIXES: [&str; 5] = [
+        "chvm.ip=",
+        "chvm.gw=",
+        "chvm.dns=",
+        "chvm.mycelium_peer=",
+        "chvm.mounts=",
+    ];
+    let kept: Vec<&str> = cmdline
+        .split_whitespace()
+        .filter(|tok| !RUNTIME_PREFIXES.iter().any(|p| tok.starts_with(p)))
+        .collect();
+    *cmdline = kept.join(" ");
 }
 
 fn cleanup_virtiofs_state_dir(storage_dir: &Path) {
@@ -1510,14 +1635,14 @@ fn cleanup_virtiofs_state_dir(storage_dir: &Path) {
     }
 }
 
-async fn wait_for_exit(pid: i32, timeout: std::time::Duration) {
+async fn wait_for_exit(pid: i32, api_socket: &str, timeout: std::time::Duration) {
     let deadline = tokio::time::Instant::now() + timeout;
     loop {
-        if !process_running(pid) {
+        if !process_is_vm(pid, api_socket) {
             return;
         }
         if tokio::time::Instant::now() > deadline {
-            kill_process(pid);
+            kill_vm_process(pid, api_socket);
             return;
         }
         tokio::time::sleep(std::time::Duration::from_millis(500)).await;
@@ -1530,6 +1655,20 @@ mod tests {
     use crate::config::Config;
     use crate::oci::pull::PullResult;
     use crate::paths::Paths;
+
+    #[test]
+    fn strip_runtime_cmdline_params_removes_injected_and_is_idempotent() {
+        let base = "console=ttyS0 root=/dev/vda rw chvm.cmd=abc";
+        let mut cmdline = format!(
+            "{base} chvm.ip=192.168.200.5/24 chvm.gw=192.168.200.1 chvm.dns=1.1.1.1 chvm.mounts=mount0=/data chvm.mycelium_peer=tcp://x"
+        );
+        strip_runtime_cmdline_params(&mut cmdline);
+        assert_eq!(cmdline, base);
+        // Re-stripping a clean cmdline is a no-op (no unbounded growth).
+        let once = cmdline.clone();
+        strip_runtime_cmdline_params(&mut cmdline);
+        assert_eq!(cmdline, once);
+    }
 
     fn make_state(id: &str, name: &str) -> RuntimeState {
         RuntimeState {
@@ -1579,6 +1718,7 @@ mod tests {
             exit_code: None,
             network_state: None,
             storage_state: None,
+            network_ownership: None,
             created_at: Utc::now(),
             started_at: None,
             stopped_at: None,
