@@ -137,6 +137,13 @@ impl DockerConfig {
         }
         let data = serde_json::to_string_pretty(self)?;
         std::fs::write(path, data)?;
+        // Credentials are stored base64-encoded (not encrypted); keep the file
+        // owner-only so other local users can't read registry passwords.
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))?;
+        }
         Ok(())
     }
 

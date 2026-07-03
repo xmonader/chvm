@@ -53,6 +53,7 @@ pub async fn pull_image(
     let (img_manifest, digest_str, config_str) =
         client.pull_manifest_and_config(&reference, &auth).await?;
 
+    crate::oci::registry::validate_digest(&digest_str)?;
     let safe_digest = sanitize_digest(&digest_str);
     let image_dir = images_dir.join(&safe_digest);
     std::fs::create_dir_all(&image_dir)?;
@@ -68,6 +69,7 @@ pub async fn pull_image(
     // Pull layers
     let mut layer_paths = Vec::new();
     for (i, layer) in img_manifest.layers.iter().enumerate() {
+        crate::oci::registry::validate_digest(&layer.digest)?;
         let layer_digest = sanitize_digest(&layer.digest);
         let layer_path = image_dir.join(format!("layer-{}-{}.tar.gz", i, layer_digest));
 
@@ -83,9 +85,20 @@ pub async fn pull_image(
             "Downloading layer"
         );
 
-        // Stream layer directly to disk via pull_blob (streams internally, no full buffering)
-        let mut file = tokio::fs::File::create(&layer_path).await?;
+        // Download to a temp path, verify the digest, then atomically rename.
+        // This guarantees a partial/interrupted download is never mistaken for a
+        // cached layer, and that the bytes match what the manifest promised.
+        let tmp_path = layer_path.with_extension("tmp");
+        let mut file = tokio::fs::File::create(&tmp_path).await?;
         client.pull_blob(&reference, layer, &mut file).await?;
+        file.sync_all().await?;
+        drop(file);
+
+        if let Err(e) = verify_blob_digest(&tmp_path, &layer.digest) {
+            let _ = std::fs::remove_file(&tmp_path);
+            return Err(e);
+        }
+        std::fs::rename(&tmp_path, &layer_path)?;
         layer_paths.push(layer_path.to_string_lossy().to_string());
     }
 
@@ -96,4 +109,30 @@ pub async fn pull_image(
         layer_paths,
         cache_dir: image_dir,
     })
+}
+
+/// Verify a downloaded blob's sha256 matches its manifest digest. Streams the
+/// file so large layers don't spike memory. Non-sha256 algorithms are skipped
+/// (validated for format elsewhere) rather than silently trusted.
+fn verify_blob_digest(path: &Path, digest: &str) -> anyhow::Result<()> {
+    use sha2::{Digest, Sha256};
+
+    let expected = match digest.split_once(':') {
+        Some(("sha256", hex)) => hex.to_ascii_lowercase(),
+        _ => return Ok(()),
+    };
+
+    let mut file = std::fs::File::open(path)?;
+    let mut hasher = Sha256::new();
+    std::io::copy(&mut file, &mut hasher)?;
+    let actual: String = hasher
+        .finalize()
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect();
+
+    if actual != expected {
+        anyhow::bail!("layer digest mismatch: expected sha256:{expected}, got sha256:{actual}");
+    }
+    Ok(())
 }

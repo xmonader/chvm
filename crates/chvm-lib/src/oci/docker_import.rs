@@ -1,4 +1,4 @@
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 use std::process::Command;
 
 use tracing::info;
@@ -64,10 +64,10 @@ fn parse_oci_tar(
     image_ref: &str,
     images_dir: &Path,
 ) -> anyhow::Result<PullResult> {
-    // Extract the tar to a temporary directory
+    // Extract the tar to a temporary directory (with path traversal protection)
     let tmp_dir = tempfile::tempdir_in(images_dir)?;
-    let mut archive = tar::Archive::new(std::io::Cursor::new(tar_data));
-    archive.unpack(tmp_dir.path())?;
+    let dest = tmp_dir.path().to_path_buf();
+    safe_unpack(tar_data, &dest)?;
 
     // Parse index.json to find the manifest index
     let index_path = tmp_dir.path().join("index.json");
@@ -119,6 +119,7 @@ fn parse_oci_tar(
     let config = ImageConfig::from_oci_config(&config_val);
 
     // Create the cache directory using the manifest digest
+    crate::oci::registry::validate_digest(&manifest_digest)?;
     let safe_digest = sanitize_digest(&manifest_digest);
     let image_dir = images_dir.join(&safe_digest);
     std::fs::create_dir_all(&image_dir)?;
@@ -134,6 +135,7 @@ fn parse_oci_tar(
             .as_str()
             .ok_or_else(|| anyhow::anyhow!("layer has no digest"))?;
 
+        crate::oci::registry::validate_digest(layer_digest)?;
         let safe_layer_digest = sanitize_digest(layer_digest);
         let dest_path = image_dir.join(format!("layer-{}-{}.tar.gz", i, safe_layer_digest));
 
@@ -174,4 +176,48 @@ fn blob_path(oci_dir: &Path, digest: &str) -> PathBuf {
     } else {
         oci_dir.join("blobs").join("sha256").join(digest)
     }
+}
+
+/// Validate that a tar entry path is safe (no path traversal).
+fn sanitize_archive_path(path: &Path) -> Option<PathBuf> {
+    let mut sanitized = PathBuf::new();
+    for component in path.components() {
+        match component {
+            Component::Normal(part) => sanitized.push(part),
+            Component::CurDir => {}
+            Component::Prefix(_) | Component::RootDir | Component::ParentDir => return None,
+        }
+    }
+    Some(sanitized)
+}
+
+/// Unpack a tar archive with path traversal protection.
+/// Rejects unsafe paths and link entries that could redirect later blob reads.
+fn safe_unpack(tar_data: &[u8], dest_dir: &Path) -> anyhow::Result<()> {
+    let mut archive = tar::Archive::new(std::io::Cursor::new(tar_data));
+    archive.set_preserve_permissions(false);
+
+    for entry in archive.entries()? {
+        let mut entry = entry?;
+        let path = match entry.path() {
+            Ok(p) => p.to_path_buf(),
+            Err(_) => continue,
+        };
+
+        let Some(_safe_path) = sanitize_archive_path(&path) else {
+            anyhow::bail!("unsafe tar entry path: {}", path.display());
+        };
+
+        let entry_type = entry.header().entry_type();
+        if entry_type.is_symlink() || entry_type.is_hard_link() {
+            anyhow::bail!("refusing link entry in OCI layout tar: {}", path.display());
+        }
+
+        match entry.unpack_in(dest_dir) {
+            Ok(true) => {}
+            Ok(false) => anyhow::bail!("tar entry escaped destination: {}", path.display()),
+            Err(e) => return Err(e.into()),
+        }
+    }
+    Ok(())
 }

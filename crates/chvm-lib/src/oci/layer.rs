@@ -71,17 +71,31 @@ fn extract_layer(layer_path: &str, dest_dir: &Path) -> anyhow::Result<()> {
 
         let path_str = path.to_string_lossy();
 
+        // Refuse device/fifo special files — a malicious layer must not plant
+        // char/block device nodes (e.g. /dev/mem) into the root-owned rootfs.
+        let etype = entry.header().entry_type();
+        if etype.is_block_special() || etype.is_character_special() || etype.is_fifo() {
+            warn!(path = %path_str, "Skipping special-file (device/fifo) tar entry");
+            continue;
+        }
+
         // Handle OCI whiteout files
         if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
             if name == ".wh..wh..opq" {
-                // Opaque whiteout: delete all contents of parent directory
+                // Opaque whiteout: delete all contents of parent directory.
+                // Resolve the parent within dest_dir so a symlink planted by an
+                // earlier layer can't redirect the delete outside the rootfs.
                 if let Some(parent) = path.parent() {
-                    let full_parent = dest_dir.join(parent);
-                    if full_parent.exists() {
-                        for child in fs::read_dir(&full_parent)?.flatten() {
-                            if let Err(e) = remove_path(&child.path()) {
-                                warn!(path = %child.path().display(), error = %e, "Failed to remove entry during opaque whiteout");
+                    match resolve_within(dest_dir, parent) {
+                        Some(full_parent) => {
+                            for child in fs::read_dir(&full_parent)?.flatten() {
+                                if let Err(e) = remove_path(&child.path()) {
+                                    warn!(path = %child.path().display(), error = %e, "Failed to remove entry during opaque whiteout");
+                                }
                             }
+                        }
+                        None => {
+                            warn!(path = %path_str, "Skipping opaque whiteout with unsafe parent")
                         }
                     }
                 }
@@ -89,11 +103,17 @@ fn extract_layer(layer_path: &str, dest_dir: &Path) -> anyhow::Result<()> {
             }
 
             if let Some(stripped) = name.strip_prefix(".wh.") {
-                // Regular whiteout: delete the specific file
+                // Regular whiteout: delete the specific file, guarding the parent
+                // against symlink redirection out of dest_dir.
                 if let Some(parent) = path.parent() {
-                    let target = dest_dir.join(parent).join(stripped);
-                    if let Err(e) = remove_path_if_exists(&target) {
-                        warn!(path = %target.display(), error = %e, "Failed to apply whiteout");
+                    match resolve_within(dest_dir, parent) {
+                        Some(full_parent) => {
+                            let target = full_parent.join(stripped);
+                            if let Err(e) = remove_path_if_exists(&target) {
+                                warn!(path = %target.display(), error = %e, "Failed to apply whiteout");
+                            }
+                        }
+                        None => warn!(path = %path_str, "Skipping whiteout with unsafe parent"),
                     }
                 }
                 continue;
@@ -109,6 +129,19 @@ fn extract_layer(layer_path: &str, dest_dir: &Path) -> anyhow::Result<()> {
     }
 
     Ok(())
+}
+
+/// Resolve `rel` under `dest_dir`, refusing paths that (after following any
+/// on-disk symlinks) escape `dest_dir`. Returns `None` if the target does not
+/// exist or lies outside the rootfs. Used to make whiteout deletes symlink-safe.
+fn resolve_within(dest_dir: &Path, rel: &Path) -> Option<PathBuf> {
+    let base = dest_dir.canonicalize().ok()?;
+    let real = dest_dir.join(rel).canonicalize().ok()?;
+    if real.starts_with(&base) {
+        Some(real)
+    } else {
+        None
+    }
 }
 
 fn sanitize_archive_path(path: &Path) -> Option<PathBuf> {

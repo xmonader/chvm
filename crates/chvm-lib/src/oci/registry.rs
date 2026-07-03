@@ -31,6 +31,22 @@ pub fn sanitize_digest(digest: &str) -> String {
     digest.trim_start_matches("sha256:").replace(':', "-")
 }
 
+/// Validate that a registry-supplied digest is well-formed (`algorithm:hex`)
+/// before it is used to build a filesystem path. Rejects path-traversal
+/// payloads such as `sha256:../../etc/cron.d/x`.
+pub fn validate_digest(digest: &str) -> anyhow::Result<()> {
+    let (algo, hex) = digest
+        .split_once(':')
+        .ok_or_else(|| anyhow::anyhow!("malformed digest (no algorithm): {digest}"))?;
+    if algo.is_empty() || !algo.bytes().all(|b| b.is_ascii_alphanumeric()) {
+        anyhow::bail!("invalid digest algorithm: {digest}");
+    }
+    if hex.len() < 32 || !hex.bytes().all(|b| b.is_ascii_hexdigit()) {
+        anyhow::bail!("invalid digest hex: {digest}");
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -65,5 +81,21 @@ mod tests {
             normalize_reference("ghcr.io/user/repo:v1"),
             "ghcr.io/user/repo:v1"
         );
+    }
+
+    #[test]
+    fn test_validate_digest_accepts_valid() {
+        assert!(validate_digest(&format!("sha256:{}", "a".repeat(64))).is_ok());
+        assert!(validate_digest(&format!("sha512:{}", "0".repeat(128))).is_ok());
+    }
+
+    #[test]
+    fn test_validate_digest_rejects_traversal() {
+        assert!(validate_digest("sha256:../../../etc/cron.d/x").is_err());
+        assert!(validate_digest("sha256:../evil").is_err());
+        assert!(validate_digest("sha256:a/b").is_err());
+        assert!(validate_digest("notadigest").is_err());
+        assert!(validate_digest("sha256:").is_err());
+        assert!(validate_digest("sha256:short").is_err());
     }
 }

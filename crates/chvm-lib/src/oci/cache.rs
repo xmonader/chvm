@@ -150,7 +150,7 @@ impl ImageCache {
 
     pub fn list(&self) -> Vec<&CachedImage> {
         let mut images: Vec<_> = self.index.images.values().collect();
-        images.sort_by(|a, b| b.last_used_at.cmp(&a.last_used_at));
+        images.sort_by_key(|img| std::cmp::Reverse(img.last_used_at));
         images
     }
 
