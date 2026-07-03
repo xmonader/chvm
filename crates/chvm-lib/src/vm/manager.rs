@@ -489,8 +489,12 @@ impl VmManager {
         // kernel needs a moment to tear the process down and have it reaped — so
         // poll briefly before declaring it stuck, otherwise we'd race the kill
         // and wrongly mark a cleanly-killed VM as Failed.
-        let died =
-            wait_until_gone(state.vmm_pid, &api_socket, std::time::Duration::from_secs(5)).await;
+        let died = wait_until_gone(
+            state.vmm_pid,
+            &api_socket,
+            std::time::Duration::from_secs(5),
+        )
+        .await;
 
         // Cleanup network
         if state.vm_config.network.mode != NetworkMode::None {

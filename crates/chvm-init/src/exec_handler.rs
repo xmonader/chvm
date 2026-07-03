@@ -134,8 +134,8 @@ pub fn handle_exec(fd: i32) {
 
             // Output pipes are closed, so the process has exited or is about to;
             // wait for the reaper to publish its exit code.
-            let exit_code = crate::signal::wait_exec_exit(pid, std::time::Duration::from_secs(10))
-                .unwrap_or(1);
+            let exit_code =
+                crate::signal::wait_exec_exit(pid, std::time::Duration::from_secs(10)).unwrap_or(1);
             let mut w = writer.lock().unwrap_or_else(|e| e.into_inner());
             send_exit(&mut *w, exit_code);
         }
