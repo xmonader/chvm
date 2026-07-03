@@ -1,0 +1,418 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>chvm — Docker-like microVMs on Cloud Hypervisor</title>
+<meta name="description" content="chvm is a Docker-like CLI for running OCI images as hardware-isolated microVMs powered by Cloud Hypervisor. Real Linux kernels, fast boot, mycelium networking.">
+<meta property="og:title" content="chvm — Docker-like microVMs">
+<meta property="og:description" content="Pull OCI images and run them as hardware-isolated microVMs with a familiar Docker-style workflow.">
+<meta property="og:type" content="website">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='.9em' font-size='90'%3E%E2%9A%A1%3C/text%3E%3C/svg%3E">
+<style>
+  :root{
+    --bg:#0b0e14;--bg2:#11161f;--panel:#141b26;--border:#1e2733;
+    --text:#e6edf3;--muted:#8b98a9;--dim:#5b6675;
+    --accent:#5eead4;--accent2:#38bdf8;--warn:#fbbf24;
+    --green:#4ade80;--red:#f87171;--purple:#a78bfa;
+    --mono:ui-monospace,"SF Mono",SFMono-Regular,Menlo,Consolas,"Liberation Mono",monospace;
+    --sans:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  html{scroll-behavior:smooth}
+  body{
+    background:var(--bg);color:var(--text);font-family:var(--sans);
+    line-height:1.6;-webkit-font-smoothing:antialiased;overflow-x:hidden;
+  }
+  a{color:var(--accent2);text-decoration:none;transition:color .15s}
+  a:hover{color:var(--accent)}
+  code{font-family:var(--mono);font-size:.9em}
+  .wrap{max-width:1080px;margin:0 auto;padding:0 24px}
+
+  /* NAV */
+  nav{
+    position:sticky;top:0;z-index:50;backdrop-filter:blur(12px);
+    background:rgba(11,14,20,.8);border-bottom:1px solid var(--border);
+  }
+  nav .wrap{display:flex;align-items:center;height:60px;gap:28px}
+  .brand{display:flex;align-items:center;gap:9px;font-family:var(--mono);
+    font-weight:700;font-size:1.15rem;color:var(--text)}
+  .brand .spark{color:var(--accent)}
+  nav .links{margin-left:auto;display:flex;gap:24px;align-items:center;font-size:.92rem}
+  nav .links a{color:var(--muted)}
+  nav .links a:hover{color:var(--text)}
+  .gh-btn{display:inline-flex;align-items:center;gap:7px;padding:7px 14px;
+    border:1px solid var(--border);border-radius:8px;color:var(--text)!important;
+    background:var(--panel);font-size:.88rem;font-weight:500}
+  .gh-btn:hover{border-color:var(--accent);background:var(--bg2)}
+
+  /* HERO */
+  .hero{position:relative;padding:88px 0 64px;overflow:hidden}
+  .hero::before{
+    content:"";position:absolute;inset:0;z-index:-1;
+    background:
+      radial-gradient(650px 400px at 78% -8%,rgba(56,189,248,.14),transparent 70%),
+      radial-gradient(560px 380px at 10% 12%,rgba(94,234,212,.10),transparent 70%);
+  }
+  .tag{display:inline-flex;align-items:center;gap:8px;font-family:var(--mono);
+    font-size:.78rem;color:var(--accent);border:1px solid var(--border);
+    background:var(--panel);padding:5px 12px;border-radius:999px;margin-bottom:24px}
+  .tag .dot{width:7px;height:7px;border-radius:50%;background:var(--green);
+    box-shadow:0 0 8px var(--green)}
+  h1{font-size:clamp(2.4rem,6vw,4rem);line-height:1.05;letter-spacing:-.02em;
+    font-weight:800;margin-bottom:20px}
+  h1 .grad{background:linear-gradient(120deg,var(--accent),var(--accent2));
+    -webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent}
+  .lede{font-size:1.2rem;color:var(--muted);max-width:640px;margin-bottom:32px}
+  .cta{display:flex;flex-wrap:wrap;gap:14px;align-items:center;margin-bottom:14px}
+  .btn{display:inline-flex;align-items:center;gap:9px;padding:12px 22px;border-radius:10px;
+    font-weight:600;font-size:.96rem;transition:transform .12s,box-shadow .2s,border-color .2s}
+  .btn-primary{background:linear-gradient(120deg,var(--accent),var(--accent2));
+    color:#04121a!important;box-shadow:0 6px 24px rgba(56,189,248,.28)}
+  .btn-primary:hover{transform:translateY(-2px);box-shadow:0 10px 32px rgba(56,189,248,.4)}
+  .btn-ghost{border:1px solid var(--border);color:var(--text)!important;background:var(--panel)}
+  .btn-ghost:hover{border-color:var(--accent)}
+
+  /* TERMINAL */
+  .term{margin-top:44px;border:1px solid var(--border);border-radius:12px;
+    background:var(--bg2);box-shadow:0 24px 60px rgba(0,0,0,.45);overflow:hidden}
+  .term-bar{display:flex;align-items:center;gap:8px;padding:11px 16px;
+    background:var(--panel);border-bottom:1px solid var(--border)}
+  .term-bar .d{width:12px;height:12px;border-radius:50%}
+  .term-bar .r{background:#ff5f57}.term-bar .y{background:#febc2e}.term-bar .g{background:#28c840}
+  .term-bar .t{margin-left:10px;font-family:var(--mono);font-size:.8rem;color:var(--dim)}
+  .term pre{margin:0;padding:20px 22px;font-family:var(--mono);font-size:.86rem;
+    line-height:1.7;overflow-x:auto}
+  .term .p{color:var(--accent)}.term .c{color:var(--text)}.term .o{color:var(--muted)}
+  .term .k{color:var(--green)}.term .a{color:var(--purple)}.term .m{color:var(--dim)}
+
+  /* SECTIONS */
+  section{padding:72px 0}
+  .sec-head{margin-bottom:44px;max-width:620px}
+  .sec-head .kicker{font-family:var(--mono);font-size:.8rem;color:var(--accent);
+    text-transform:uppercase;letter-spacing:.12em;margin-bottom:12px}
+  .sec-head h2{font-size:clamp(1.8rem,4vw,2.5rem);letter-spacing:-.01em;line-height:1.1}
+  .sec-head p{color:var(--muted);margin-top:14px;font-size:1.05rem}
+
+  /* FEATURES */
+  .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:18px}
+  .card{background:var(--panel);border:1px solid var(--border);border-radius:14px;
+    padding:26px 24px;transition:transform .15s,border-color .15s,background .15s}
+  .card:hover{transform:translateY(-3px);border-color:#2a3746;background:#161d29}
+  .card .ico{width:40px;height:40px;display:flex;align-items:center;justify-content:center;
+    border-radius:10px;background:rgba(94,234,212,.1);font-size:1.3rem;margin-bottom:16px}
+  .card h3{font-size:1.08rem;margin-bottom:8px}
+  .card p{color:var(--muted);font-size:.93rem}
+  .card code{color:var(--accent);background:var(--bg);padding:1px 5px;border-radius:4px}
+
+  /* WORKFLOW */
+  .flow{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:18px;
+    counter-reset:step}
+  .step{position:relative;background:var(--panel);border:1px solid var(--border);
+    border-radius:14px;padding:26px 22px}
+  .step::before{counter-increment:step;content:counter(step);
+    position:absolute;top:-14px;left:22px;width:30px;height:30px;border-radius:8px;
+    display:flex;align-items:center;justify-content:center;font-family:var(--mono);
+    font-weight:700;background:linear-gradient(120deg,var(--accent),var(--accent2));color:#04121a}
+  .step h3{margin:8px 0 8px;font-size:1.05rem}
+  .step p{color:var(--muted);font-size:.92rem}
+  .step code{color:var(--accent2)}
+
+  /* SPLIT */
+  .split{display:grid;grid-template-columns:1fr 1fr;gap:40px;align-items:center}
+  .split ul{list-style:none;margin-top:8px}
+  .split li{padding:10px 0 10px 30px;position:relative;color:var(--muted)}
+  .split li::before{content:"→";position:absolute;left:0;color:var(--accent);font-family:var(--mono)}
+  .split li b{color:var(--text);font-weight:600}
+  .reqs{background:var(--panel);border:1px solid var(--border);border-radius:14px;padding:28px}
+  .reqs h3{font-size:1rem;font-family:var(--mono);color:var(--muted);margin-bottom:16px;
+    text-transform:uppercase;letter-spacing:.08em;font-weight:600}
+  .reqs .row{display:flex;justify-content:space-between;padding:11px 0;
+    border-top:1px solid var(--border);font-size:.94rem}
+  .reqs .row:first-of-type{border-top:none}
+  .reqs .row span:first-child{color:var(--muted)}
+  .reqs .row span:last-child{font-family:var(--mono);color:var(--text)}
+
+  /* DOCS */
+  .doclist{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:14px}
+  .doc{display:flex;gap:14px;align-items:flex-start;background:var(--panel);
+    border:1px solid var(--border);border-radius:12px;padding:20px;transition:border-color .15s}
+  .doc:hover{border-color:var(--accent)}
+  .doc .di{font-size:1.4rem;flex-shrink:0}
+  .doc h4{font-size:1rem;color:var(--text);margin-bottom:3px}
+  .doc p{color:var(--muted);font-size:.88rem}
+
+  /* CTA STRIP */
+  .strip{text-align:center;background:
+      radial-gradient(600px 300px at 50% 0%,rgba(56,189,248,.12),transparent 70%);
+    border-top:1px solid var(--border);border-bottom:1px solid var(--border)}
+  .strip h2{font-size:clamp(1.8rem,4vw,2.6rem);margin-bottom:16px}
+  .strip p{color:var(--muted);max-width:520px;margin:0 auto 28px;font-size:1.08rem}
+  .copy{display:inline-flex;align-items:center;gap:12px;font-family:var(--mono);
+    background:var(--bg2);border:1px solid var(--border);border-radius:10px;
+    padding:14px 18px;font-size:.92rem;color:var(--text)}
+  .copy .pfx{color:var(--dim)}
+
+  /* FOOTER */
+  footer{padding:40px 0;border-top:1px solid var(--border);color:var(--dim);font-size:.9rem}
+  footer .wrap{display:flex;flex-wrap:wrap;gap:16px;align-items:center;justify-content:space-between}
+  footer .fl{display:flex;gap:22px}
+  footer a{color:var(--muted)}
+
+  @media(max-width:720px){
+    .split{grid-template-columns:1fr;gap:28px}
+    nav .links a:not(.gh-btn){display:none}
+    section{padding:56px 0}
+  }
+</style>
+</head>
+<body>
+
+<nav>
+  <div class="wrap">
+    <span class="brand"><span class="spark">⚡</span>chvm</span>
+    <div class="links">
+      <a href="#features">Features</a>
+      <a href="#quickstart">Quick Start</a>
+      <a href="#how">How it works</a>
+      <a href="#docs">Docs</a>
+      <a class="gh-btn" href="https://github.com/xmonader/chvm">
+        <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>
+        GitHub
+      </a>
+    </div>
+  </div>
+</nav>
+
+<header class="hero">
+  <div class="wrap">
+    <span class="tag"><span class="dot"></span>Written in Rust · Cloud Hypervisor</span>
+    <h1>Container workflow.<br><span class="grad">Real VM isolation.</span></h1>
+    <p class="lede">
+      chvm pulls OCI images and runs them as hardware-isolated microVMs — each booting
+      a real Linux kernel with its own network stack — through a Docker-style CLI you
+      already know.
+    </p>
+    <div class="cta">
+      <a class="btn btn-primary" href="#quickstart">Get started →</a>
+      <a class="btn btn-ghost" href="https://github.com/xmonader/chvm">View on GitHub</a>
+    </div>
+
+    <div class="term">
+      <div class="term-bar">
+        <span class="d r"></span><span class="d y"></span><span class="d g"></span>
+        <span class="t">bash — chvm</span>
+      </div>
+<pre><span class="p">$</span> <span class="c">chvm run</span> <span class="a">--name web</span> <span class="c">docker.io/library/nginx:latest</span>
+<span class="o">→ pulling nginx:latest ......... done</span>
+<span class="o">→ preparing rootfs (virtiofs) .. done</span>
+<span class="o">→ booting microVM ............. done</span>
+<span class="k">web</span>  <span class="m">a1b2c3d4</span>  running  <span class="m">400::1a2b  (mycelium)</span>
+
+<span class="p">$</span> <span class="c">chvm exec</span> <span class="k">web</span> <span class="c">nginx -v</span>
+<span class="o">nginx version: nginx/1.27.4</span>
+
+<span class="p">$</span> <span class="c">chvm ls</span>
+<span class="m">NAME  ID        STATE    CPU  MEM    NETWORK</span>
+<span class="k">web</span>   a1b2c3d4  running  1    512M   mycelium</span></pre>
+    </div>
+  </div>
+</header>
+
+<section id="features">
+  <div class="wrap">
+    <div class="sec-head">
+      <div class="kicker">Capabilities</div>
+      <h2>Everything you'd expect — plus a hypervisor underneath</h2>
+      <p>A familiar command surface backed by KVM-accelerated microVMs instead of shared-kernel namespaces.</p>
+    </div>
+    <div class="grid">
+      <div class="card">
+        <div class="ico">🐳</div>
+        <h3>Docker-like CLI</h3>
+        <p><code>run</code>, <code>exec</code>, <code>attach</code>, <code>stop</code>, <code>rm</code> — the verbs you already know, backed by full VMs.</p>
+      </div>
+      <div class="card">
+        <div class="ico">📦</div>
+        <h3>OCI image support</h3>
+        <p>Pull from Docker Hub and any OCI-compatible registry, with digest verification and layer caching.</p>
+      </div>
+      <div class="card">
+        <div class="ico">🛡️</div>
+        <h3>Hardware isolation</h3>
+        <p>Every VM boots a real Linux kernel with its own memory and network stack — stronger than a container.</p>
+      </div>
+      <div class="card">
+        <div class="ico">⚡</div>
+        <h3>Fast boot</h3>
+        <p>MicroVMs start in 2–5 seconds thanks to Cloud Hypervisor's minimal device model.</p>
+      </div>
+      <div class="card">
+        <div class="ico">🌐</div>
+        <h3>Mycelium & TAP networking</h3>
+        <p>Peer-to-peer IPv6 overlay with automatic IP tracking, or bridged TAP with NAT and port forwarding.</p>
+      </div>
+      <div class="card">
+        <div class="ico">💾</div>
+        <h3>virtiofs & block storage</h3>
+        <p>Share host directories or back VMs with ext4 block devices — pick per VM.</p>
+      </div>
+      <div class="card">
+        <div class="ico">🔌</div>
+        <h3>Exec & attach over vsock</h3>
+        <p>Run commands or drop into an interactive shell through a host↔guest vsock channel — no SSH required.</p>
+      </div>
+      <div class="card">
+        <div class="ico">🧹</div>
+        <h3>Self-healing cleanup</h3>
+        <p><code>chvm doctor --gc</code> reclaims leaked TAP devices, iptables rules, and orphaned processes from crashed VMs.</p>
+      </div>
+      <div class="card">
+        <div class="ico">🔑</div>
+        <h3>Registry auth & completions</h3>
+        <p><code>chvm login</code>/<code>logout</code> with <code>~/.docker/config.json</code>, plus dynamic shell tab completion.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section id="quickstart" style="background:var(--bg2);border-block:1px solid var(--border)">
+  <div class="wrap">
+    <div class="sec-head">
+      <div class="kicker">Quick Start</div>
+      <h2>From clone to running VM</h2>
+      <p>Build the host CLI and a statically-linked guest init, then boot your first microVM.</p>
+    </div>
+    <div class="flow">
+      <div class="step">
+        <h3>Clone & build</h3>
+        <p><code>make build</code> compiles the CLI and a musl-static guest <code>init</code>.</p>
+      </div>
+      <div class="step">
+        <h3>Check the host</h3>
+        <p><code>chvm doctor</code> verifies KVM, Cloud Hypervisor, virtiofsd and networking.</p>
+      </div>
+      <div class="step">
+        <h3>Set up</h3>
+        <p><code>sudo chvm setup</code> extracts a kernel and creates the bridge.</p>
+      </div>
+      <div class="step">
+        <h3>Run</h3>
+        <p><code>chvm run nginx</code> pulls the image and boots the VM.</p>
+      </div>
+    </div>
+
+    <div class="term" style="margin-top:36px">
+      <div class="term-bar">
+        <span class="d r"></span><span class="d y"></span><span class="d g"></span>
+        <span class="t">install.sh</span>
+      </div>
+<pre><span class="m"># Clone the repo</span>
+<span class="p">$</span> <span class="c">git clone https://github.com/xmonader/chvm.git && cd chvm</span>
+
+<span class="m"># One-time: static musl target for the guest init</span>
+<span class="p">$</span> <span class="c">rustup target add x86_64-unknown-linux-musl</span>
+
+<span class="m"># Build host CLI + guest init, then install</span>
+<span class="p">$</span> <span class="c">make build && make install</span>
+
+<span class="m"># Prepare the host (kernel + bridge)</span>
+<span class="p">$</span> <span class="c">chvm doctor && sudo chvm setup</span>
+
+<span class="m"># Boot your first microVM</span>
+<span class="p">$</span> <span class="c">chvm run docker.io/library/alpine:latest</span></pre>
+    </div>
+  </div>
+</section>
+
+<section id="how">
+  <div class="wrap">
+    <div class="split">
+      <div>
+        <div class="sec-head" style="margin-bottom:20px">
+          <div class="kicker">How it works</div>
+          <h2>A thin, honest stack</h2>
+        </div>
+        <ul>
+          <li><b>OCI pull</b> fetches and verifies image layers, then flattens them into a rootfs (honoring whiteouts).</li>
+          <li><b>Guest init</b> — a static PID 1 written in Rust — mounts the rootfs, brings up networking, and reaps children.</li>
+          <li><b>Cloud Hypervisor</b> boots a real kernel with the rootfs over virtiofs or an ext4 block device.</li>
+          <li><b>vsock channel</b> carries <code>exec</code> and <code>attach</code> traffic between host and guest with binary-safe framing.</li>
+          <li><b>mycelium</b> injects a peer-to-peer IPv6 overlay so VMs get routable addresses out of the box.</li>
+        </ul>
+      </div>
+      <div class="reqs">
+        <h3>Requirements</h3>
+        <div class="row"><span>OS</span><span>Linux + KVM</span></div>
+        <div class="row"><span>Hypervisor</span><span>cloud-hypervisor v50+</span></div>
+        <div class="row"><span>Shares</span><span>virtiofsd</span></div>
+        <div class="row"><span>Privileges</span><span>root / doas / sudo</span></div>
+        <div class="row"><span>Tooling</span><span>iptables · iproute2 · mkfs.ext4</span></div>
+        <div class="row"><span>Language</span><span>Rust (musl guest)</span></div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section id="docs" style="background:var(--bg2);border-block:1px solid var(--border)">
+  <div class="wrap">
+    <div class="sec-head">
+      <div class="kicker">Documentation</div>
+      <h2>Go deeper</h2>
+      <p>Hand-written guides covering concepts, architecture, and day-to-day usage.</p>
+    </div>
+    <div class="doclist">
+      <a class="doc" href="https://github.com/xmonader/chvm/blob/main/docs/tutorial.md">
+        <span class="di">🚀</span>
+        <div><h4>Tutorial</h4><p>Boot your first VM step by step.</p></div>
+      </a>
+      <a class="doc" href="https://github.com/xmonader/chvm/blob/main/docs/user-guide.md">
+        <span class="di">📖</span>
+        <div><h4>User Guide</h4><p>Every command, flag, and workflow.</p></div>
+      </a>
+      <a class="doc" href="https://github.com/xmonader/chvm/blob/main/docs/concepts.md">
+        <span class="di">💡</span>
+        <div><h4>Concepts</h4><p>Images, rootfs, networking, storage.</p></div>
+      </a>
+      <a class="doc" href="https://github.com/xmonader/chvm/blob/main/docs/architecture.md">
+        <span class="di">🏗️</span>
+        <div><h4>Architecture</h4><p>How the crates fit together.</p></div>
+      </a>
+      <a class="doc" href="https://github.com/xmonader/chvm/blob/main/docs/components.md">
+        <span class="di">🧩</span>
+        <div><h4>Components</h4><p>lib, cli, and guest init internals.</p></div>
+      </a>
+      <a class="doc" href="https://github.com/xmonader/chvm/blob/main/docs/testing.md">
+        <span class="di">🧪</span>
+        <div><h4>Testing</h4><p>Unit and integration test suites.</p></div>
+      </a>
+    </div>
+  </div>
+</section>
+
+<section class="strip">
+  <div class="wrap">
+    <h2>Run a container. Get a VM.</h2>
+    <p>Free and open source. Clone it, build it, boot a microVM in minutes.</p>
+    <div class="copy"><span class="pfx">$</span> git clone https://github.com/xmonader/chvm.git</div>
+    <div style="margin-top:26px">
+      <a class="btn btn-primary" href="https://github.com/xmonader/chvm">Star on GitHub ★</a>
+    </div>
+  </div>
+</section>
+
+<footer>
+  <div class="wrap">
+    <span class="brand"><span class="spark">⚡</span>chvm</span>
+    <div class="fl">
+      <a href="https://github.com/xmonader/chvm">GitHub</a>
+      <a href="https://github.com/xmonader/chvm/blob/main/docs/user-guide.md">Docs</a>
+      <a href="https://www.cloudhypervisor.org/">Cloud Hypervisor</a>
+      <a href="https://github.com/xmonader/chvm/issues">Issues</a>
+    </div>
+    <span>MIT licensed · built with Rust</span>
+  </div>
+</footer>
+
+</body>
+</html>
