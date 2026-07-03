@@ -1,0 +1,228 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>chvm — Documentation</title>
+<meta name="description" content="chvm documentation: tutorial, user guide, concepts, architecture, components, and testing.">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='.9em' font-size='90'%3E%E2%9A%A1%3C/text%3E%3C/svg%3E">
+<link rel="stylesheet" href="assets/site.css">
+<link rel="stylesheet" href="vendor/highlight-dark.css">
+<style>
+  .layout{display:grid;grid-template-columns:250px minmax(0,1fr) 200px;gap:36px;
+    max-width:1280px;margin:0 auto;padding:32px 24px 80px;align-items:start}
+  .side{position:sticky;top:76px}
+  .side h4{font-family:var(--mono);font-size:.74rem;text-transform:uppercase;
+    letter-spacing:.1em;color:var(--dim);margin:0 0 12px 10px}
+  .side nav{display:flex;flex-direction:column;gap:2px}
+  .side a{display:flex;gap:10px;align-items:center;padding:9px 12px;border-radius:8px;
+    color:var(--muted);font-size:.94rem}
+  .side a:hover{background:var(--panel);color:var(--text)}
+  .side a.active{background:rgba(94,234,212,.1);color:var(--accent)}
+  .side a .e{width:18px;text-align:center}
+  .toc{position:sticky;top:76px;font-size:.85rem}
+  .toc h4{font-family:var(--mono);font-size:.72rem;text-transform:uppercase;
+    letter-spacing:.1em;color:var(--dim);margin:0 0 12px}
+  .toc a{display:block;padding:4px 0 4px 12px;color:var(--dim);
+    border-left:2px solid var(--border);line-height:1.4}
+  .toc a:hover{color:var(--text);border-left-color:var(--muted)}
+  .toc a.h3{padding-left:24px;font-size:.82rem}
+  .toc a.active{color:var(--accent);border-left-color:var(--accent)}
+
+  /* Markdown body */
+  .md{min-width:0}
+  .md .loading{color:var(--dim);font-family:var(--mono);padding:40px 0}
+  .md h1,.md h2,.md h3,.md h4{line-height:1.25;letter-spacing:-.01em;scroll-margin-top:76px}
+  .md h1{font-size:2.1rem;margin:0 0 8px;font-weight:800}
+  .md h2{font-size:1.5rem;margin:44px 0 14px;padding-bottom:10px;border-bottom:1px solid var(--border)}
+  .md h3{font-size:1.2rem;margin:30px 0 10px}
+  .md h4{font-size:1.02rem;margin:22px 0 8px;color:var(--muted)}
+  .md p{margin:14px 0;color:#c7d1dc}
+  .md ul,.md ol{margin:14px 0;padding-left:26px;color:#c7d1dc}
+  .md li{margin:6px 0}
+  .md li::marker{color:var(--accent)}
+  .md a{color:var(--accent2)}
+  .md a:hover{text-decoration:underline}
+  .md strong{color:var(--text)}
+  .md blockquote{margin:18px 0;padding:2px 18px;border-left:3px solid var(--accent);
+    background:var(--panel);border-radius:0 8px 8px 0;color:var(--muted)}
+  .md hr{border:none;border-top:1px solid var(--border);margin:32px 0}
+  .md code{font-family:var(--mono);font-size:.86em;background:var(--bg2);
+    border:1px solid var(--border);padding:1px 6px;border-radius:5px;color:var(--accent)}
+  .md pre{margin:18px 0;border:1px solid var(--border);border-radius:10px;
+    background:#0d1117;overflow-x:auto}
+  .md pre code{display:block;padding:16px 18px;background:none;border:none;color:inherit;
+    font-size:.85rem;line-height:1.6}
+  .md table{border-collapse:collapse;width:100%;margin:18px 0;font-size:.92rem;
+    display:block;overflow-x:auto}
+  .md th,.md td{border:1px solid var(--border);padding:9px 13px;text-align:left}
+  .md th{background:var(--panel);font-family:var(--mono);font-size:.82rem;color:var(--muted)}
+  .md img{max-width:100%}
+  .md .err{color:var(--red);font-family:var(--mono)}
+  .doc-foot{margin-top:56px;padding-top:24px;border-top:1px solid var(--border);
+    display:flex;justify-content:space-between;font-size:.9rem;color:var(--muted)}
+
+  @media(max-width:1080px){
+    .layout{grid-template-columns:220px minmax(0,1fr)}
+    .toc{display:none}
+  }
+  @media(max-width:760px){
+    .layout{grid-template-columns:1fr;gap:20px}
+    .side{position:static}
+    .side nav{flex-direction:row;flex-wrap:wrap}
+  }
+</style>
+</head>
+<body>
+
+<nav>
+  <div class="wrap">
+    <a class="brand" href="index.html"><span class="spark">⚡</span>chvm</a>
+    <div class="links">
+      <a href="index.html#features">Features</a>
+      <a href="index.html#commands">Commands</a>
+      <a href="index.html#quickstart">Quick Start</a>
+      <a href="docs.html" class="active">Docs</a>
+      <a class="gh-btn" href="https://github.com/xmonader/chvm">
+        <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>
+        GitHub
+      </a>
+    </div>
+  </div>
+</nav>
+
+<div class="layout">
+  <aside class="side">
+    <h4>Documentation</h4>
+    <nav id="sidenav"></nav>
+  </aside>
+
+  <main class="md" id="content">
+    <p class="loading">Loading documentation…</p>
+  </main>
+
+  <aside class="toc" id="toc"></aside>
+</div>
+
+<script src="vendor/marked.min.js"></script>
+<script src="vendor/highlight.min.js"></script>
+<script>
+(function(){
+  var DOCS = [
+    {id:"tutorial",    file:"tutorial.md",     title:"Tutorial",     emoji:"🚀"},
+    {id:"user-guide",  file:"user-guide.md",   title:"User Guide",   emoji:"📖"},
+    {id:"concepts",    file:"concepts.md",     title:"Concepts",     emoji:"💡"},
+    {id:"architecture",file:"architecture.md", title:"Architecture", emoji:"🏗️"},
+    {id:"components",   file:"components.md",   title:"Components",   emoji:"🧩"},
+    {id:"testing",     file:"testing.md",      title:"Testing",      emoji:"🧪"}
+  ];
+
+  var content = document.getElementById("content");
+  var tocEl   = document.getElementById("toc");
+  var sidenav = document.getElementById("sidenav");
+  var cache   = {};
+
+  // Build sidebar
+  DOCS.forEach(function(d){
+    var a = document.createElement("a");
+    a.href = "#" + d.id;
+    a.dataset.id = d.id;
+    a.innerHTML = '<span class="e">'+d.emoji+'</span>'+d.title;
+    sidenav.appendChild(a);
+  });
+
+  function slug(s){
+    return s.toLowerCase().trim().replace(/[^\w\s-]/g,"").replace(/\s+/g,"-");
+  }
+
+  function currentDoc(){
+    var id = (location.hash || "#tutorial").slice(1).split("--")[0];
+    return DOCS.filter(function(d){return d.id===id;})[0] || DOCS[0];
+  }
+
+  function highlight(){
+    if (!window.hljs) return;
+    content.querySelectorAll("pre code").forEach(function(b){
+      try { window.hljs.highlightElement(b); } catch(e){}
+    });
+  }
+
+  function buildToc(){
+    tocEl.innerHTML = "";
+    var heads = content.querySelectorAll("h2, h3");
+    if (!heads.length) return;
+    var h = document.createElement("h4"); h.textContent = "On this page"; tocEl.appendChild(h);
+    heads.forEach(function(el){
+      if (!el.id) el.id = slug(el.textContent);
+      var a = document.createElement("a");
+      a.href = "#"+currentDoc().id+"--"+el.id;
+      a.textContent = el.textContent;
+      if (el.tagName === "H3") a.className = "h3";
+      a.dataset.target = el.id;
+      tocEl.appendChild(a);
+    });
+  }
+
+  function markActiveDoc(id){
+    sidenav.querySelectorAll("a").forEach(function(a){
+      a.classList.toggle("active", a.dataset.id === id);
+    });
+  }
+
+  function render(md){
+    marked.setOptions({gfm:true, breaks:false});
+    content.innerHTML = marked.parse(md);
+    highlight();
+    buildToc();
+  }
+
+  function load(){
+    var d = currentDoc();
+    markActiveDoc(d.id);
+    document.title = "chvm — " + d.title;
+
+    var anchor = (location.hash.split("--")[1]) || null;
+
+    if (cache[d.id]) { render(cache[d.id]); scrollTo(anchor); return; }
+
+    content.innerHTML = '<p class="loading">Loading '+d.title+'…</p>';
+    fetch(d.file, {cache:"no-cache"})
+      .then(function(r){ if(!r.ok) throw new Error("HTTP "+r.status); return r.text(); })
+      .then(function(txt){ cache[d.id]=txt; render(txt); scrollTo(anchor); })
+      .catch(function(e){
+        content.innerHTML =
+          '<h1>'+d.title+'</h1>'+
+          '<p class="err">Could not load <code>'+d.file+'</code> ('+e.message+').</p>'+
+          '<p>This viewer fetches Markdown at runtime, so it needs to be served over HTTP. '+
+          'Open the site via GitHub Pages or run <code>python3 -m http.server -d docs</code>, '+
+          'or read <a href="https://github.com/xmonader/chvm/blob/main/docs/'+d.file+'">'+d.file+' on GitHub</a>.</p>';
+      });
+  }
+
+  function scrollTo(anchor){
+    if (!anchor){ window.scrollTo(0,0); return; }
+    var el = document.getElementById(anchor);
+    if (el) el.scrollIntoView();
+  }
+
+  // Scroll-spy for the TOC
+  var ticking = false;
+  window.addEventListener("scroll", function(){
+    if (ticking) return; ticking = true;
+    requestAnimationFrame(function(){
+      var heads = content.querySelectorAll("h2, h3");
+      var top = window.scrollY + 90, cur = null;
+      heads.forEach(function(h){ if (h.offsetTop <= top) cur = h.id; });
+      tocEl.querySelectorAll("a").forEach(function(a){
+        a.classList.toggle("active", a.dataset.target === cur);
+      });
+      ticking = false;
+    });
+  }, {passive:true});
+
+  window.addEventListener("hashchange", load);
+  load();
+})();
+</script>
+</body>
+</html>
