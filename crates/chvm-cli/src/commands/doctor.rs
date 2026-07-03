@@ -150,6 +150,8 @@ pub async fn execute(args: &DoctorArgs) -> anyhow::Result<()> {
 async fn gc_cleanup() -> anyhow::Result<()> {
     let paths = Paths::resolve();
     paths.ensure_dirs()?;
+    let vms_dir = paths.vms.clone();
+    let base_dir = paths.base.clone();
     let config = Config::load(&paths.config_file)?;
     let mut manager = VmManager::new(config, paths)?;
 
@@ -210,7 +212,69 @@ async fn gc_cleanup() -> anyhow::Result<()> {
     gc_orphaned_tap_devices(&running_prefixes, &stale_tap_devices);
     gc_orphaned_iptables_rules(&stale_ips);
 
+    let running_ids: HashSet<String> = running_after.iter().cloned().collect();
+    gc_orphaned_virtiofsd(&vms_dir, &running_ids);
+
+    // Reconcile ownership: under sudo/doas, root-owned files accumulate in the
+    // user's data dir and lock out non-root read commands. Hand the whole tree
+    // back to the invoking user (no-op when not running under sudo/doas).
+    if chvm_lib::paths::invoker_ids().is_some() {
+        print!("Reconciling data directory ownership ... ");
+        chvm_lib::paths::chown_tree_to_invoker(&base_dir);
+        println!("done");
+    }
+
     Ok(())
+}
+
+/// Kill virtiofsd daemons whose socket lives under our vms dir but whose VM is
+/// no longer running (e.g. leaked by a crash mid-start). A SIGKILL mid-create
+/// can orphan these root-owned daemons; nothing else reaps them.
+fn gc_orphaned_virtiofsd(vms_dir: &std::path::Path, running_ids: &HashSet<String>) {
+    let Ok(entries) = std::fs::read_dir("/proc") else {
+        eprintln!("Warning: Failed to scan /proc for virtiofsd");
+        return;
+    };
+    let vms_prefix = format!("{}/", vms_dir.to_string_lossy());
+    let mut killed = 0;
+
+    for entry in entries.flatten() {
+        let Ok(pid) = entry.file_name().to_string_lossy().parse::<i32>() else {
+            continue;
+        };
+        // Only real virtiofsd processes.
+        if std::fs::read_to_string(format!("/proc/{pid}/comm"))
+            .map(|c| c.trim() != "virtiofsd")
+            .unwrap_or(true)
+        {
+            continue;
+        }
+        let Ok(raw) = std::fs::read(format!("/proc/{pid}/cmdline")) else {
+            continue;
+        };
+        let cmdline = String::from_utf8_lossy(&raw);
+        // Extract the VM id: the path component right after `<vms_dir>/`.
+        let Some(after) = cmdline.split(&vms_prefix).nth(1) else {
+            continue; // not one of ours
+        };
+        let vmid = after.split('/').next().unwrap_or("").to_string();
+        if vmid.is_empty() || running_ids.contains(&vmid) {
+            continue;
+        }
+        print!("Killing orphaned virtiofsd (pid {pid}, vm {vmid}) ... ");
+        match Command::new("kill").args(["-9", &pid.to_string()]).output() {
+            Ok(out) if out.status.success() => {
+                killed += 1;
+                println!("done");
+            }
+            Ok(out) => println!("failed: {}", String::from_utf8_lossy(&out.stderr).trim()),
+            Err(e) => println!("failed: {e}"),
+        }
+    }
+
+    if killed == 0 {
+        println!("No orphaned virtiofsd found");
+    }
 }
 
 fn gc_orphaned_tap_devices(
