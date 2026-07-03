@@ -52,6 +52,10 @@ impl Paths {
             &self.kernels,
         ] {
             std::fs::create_dir_all(dir)?;
+            // When running under sudo/doas, hand the data dirs back to the
+            // invoking user so a later non-root `chvm list/logs` isn't locked
+            // out of its own state by root-owned files.
+            chown_to_invoker(dir);
         }
         Ok(())
     }
@@ -74,6 +78,63 @@ fn get_user_home(username: &str) -> PathBuf {
         }
     }
     Path::new("/home").join(username)
+}
+
+/// (uid, gid) of the user who invoked us under sudo/doas, but only when we are
+/// actually running as root (otherwise there is nothing to hand back).
+pub fn invoker_ids() -> Option<(u32, u32)> {
+    #[cfg(unix)]
+    {
+        if nix::unistd::geteuid().as_raw() != 0 {
+            return None;
+        }
+        let username = env::var("SUDO_USER")
+            .ok()
+            .or_else(|| env::var("DOAS_USER").ok())?;
+        if let Ok(Some(user)) = nix::unistd::User::from_name(&username) {
+            return Some((user.uid.as_raw(), user.gid.as_raw()));
+        }
+    }
+    None
+}
+
+/// Best-effort chown of a single path to the invoking user (no-op if not root
+/// or no sudo/doas context). Failures are ignored — this is a convenience to
+/// avoid lock-outs, not a correctness requirement.
+pub fn chown_to_invoker(path: &Path) {
+    #[cfg(unix)]
+    if let Some((uid, gid)) = invoker_ids() {
+        let _ = nix::unistd::chown(
+            path,
+            Some(nix::unistd::Uid::from_raw(uid)),
+            Some(nix::unistd::Gid::from_raw(gid)),
+        );
+    }
+}
+
+/// Best-effort recursive chown of a path tree to the invoking user.
+pub fn chown_tree_to_invoker(path: &Path) {
+    let Some((uid, gid)) = invoker_ids() else {
+        return;
+    };
+    #[cfg(unix)]
+    {
+        let (u, g) = (
+            Some(nix::unistd::Uid::from_raw(uid)),
+            Some(nix::unistd::Gid::from_raw(gid)),
+        );
+        let _ = nix::unistd::chown(path, u, g);
+        if let Ok(entries) = std::fs::read_dir(path) {
+            for entry in entries.flatten() {
+                let child = entry.path();
+                if entry.file_type().map(|t| t.is_dir()).unwrap_or(false) {
+                    chown_tree_to_invoker(&child);
+                } else {
+                    let _ = nix::unistd::chown(&child, u, g);
+                }
+            }
+        }
+    }
 }
 
 #[cfg(test)]

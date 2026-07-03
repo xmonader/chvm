@@ -124,6 +124,7 @@ impl Config {
     pub fn save(&self, path: &Path) -> anyhow::Result<()> {
         let data = serde_json::to_string_pretty(self)?;
         crate::utils::atomic_write(path, data.as_bytes())?;
+        crate::paths::chown_to_invoker(path);
         Ok(())
     }
 

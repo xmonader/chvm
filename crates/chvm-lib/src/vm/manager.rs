@@ -105,6 +105,9 @@ impl StateStore {
 
         let data = serde_json::to_string_pretty(state)?;
         atomic_write(&state_path, data.as_bytes())?;
+        // Keep the VM dir owned by the invoking user (under sudo/doas) so
+        // non-root inspection commands aren't locked out.
+        crate::paths::chown_tree_to_invoker(&vm_dir);
         self.states.insert(state.id.clone(), state.clone());
         Ok(())
     }

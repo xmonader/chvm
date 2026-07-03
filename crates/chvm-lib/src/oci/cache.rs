@@ -317,6 +317,9 @@ impl ImageCache {
         let path = self.index_path();
         let data = serde_json::to_string_pretty(&self.index)?;
         atomic_write(&path, data.as_bytes())?;
+        // Under sudo/doas keep the index readable by the invoking user so a
+        // non-root `chvm images/list` isn't locked out.
+        crate::paths::chown_to_invoker(&path);
         Ok(())
     }
 
