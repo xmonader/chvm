@@ -23,7 +23,7 @@ chvm lets you pull OCI container images and run them as hardware-isolated virtua
 ## Requirements
 
 - Linux with KVM support (`/dev/kvm`)
-- [Cloud Hypervisor](https://github.com/cloud-hypervisor/cloud-hypervisor) v50+
+- [Cloud Hypervisor](https://github.com/cloud-hypervisor/cloud-hypervisor) v52+ (older releases reject the explicit `--disk image_type=raw` chvm passes)
 - [virtiofsd](https://gitlab.com/virtio-fs/virtiofsd) (for volume mounts and virtiofs storage)
 - Root privileges (or `doas`/`sudo`) for VM operations
 - `mkfs.ext4`, `iptables`, `ip` (iproute2)

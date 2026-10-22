@@ -44,10 +44,14 @@ pub fn build_args(config: &VmConfig, vm_dir: &Path) -> Vec<String> {
             fs_entries.push(format!("tag=rootfs,socket={}", config.rootfs.source));
         }
         RootfsType::VirtioBlock => {
+            // image_type=raw is mandatory: cloud-hypervisor v52+ auto-detects
+            // raw images and disables sector-0 writes, which breaks ext4
+            // root filesystems (superblock lives in block 0) and panics the
+            // guest. Auto-detection is also deprecated.
             push_arg(
                 &mut args,
                 "--disk",
-                format!("path={}", config.rootfs.source),
+                format!("path={},image_type=raw", config.rootfs.source),
             );
         }
     }
@@ -242,5 +246,23 @@ mod tests {
         let fs_index = fs_positions[0];
         assert_eq!(args[fs_index + 1], "tag=rootfs,socket=/rootfs.sock");
         assert_eq!(args[fs_index + 2], "tag=mount0,socket=/mount.sock");
+    }
+
+    #[test]
+    fn build_args_marks_block_rootfs_as_raw_image() {
+        let config = sample_vm_config(RootfsType::VirtioBlock, vec![]);
+
+        let args = build_args(&config, Path::new("/vm"));
+        let disk_positions: Vec<_> = args
+            .iter()
+            .enumerate()
+            .filter_map(|(idx, arg)| (arg == "--disk").then_some(idx))
+            .collect();
+
+        assert_eq!(disk_positions.len(), 1);
+        assert_eq!(
+            args[disk_positions[0] + 1],
+            "path=/rootfs.sock,image_type=raw"
+        );
     }
 }
