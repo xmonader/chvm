@@ -221,6 +221,29 @@ chvm attach myvm
 
 ---
 
+### chvm console
+
+Open the serial rescue console of a running VM.
+
+```
+chvm console <CONTAINER>
+```
+
+Attaches your terminal to the VM's serial port (ttyS0). The kernel is booted with `console=ttyS0 console=hvc0`, so kernel messages and early panics appear here even when guest init or the vsock path (used by `exec`/`attach`) is broken, and chvm-init keeps a rescue `/bin/sh` running on the serial port.
+
+Detach with `Ctrl+Q` (minicom-style; the VM keeps running). The console also exits by itself when the VM shuts down.
+
+```bash
+chvm console myvm
+# Connected to serial console. Press Ctrl-Q to exit.
+# ...kernel messages and a root shell on /dev/ttyS0...
+# Ctrl-Q to detach
+```
+
+Use this as the first diagnostic step when a VM won't boot, when `chvm attach` can't connect, or when `chvm logs` stops early — everything the kernel printed before init died is visible here. Normal `chvm logs` output is unaffected: guest init stdio still goes to `console.log` via the virtio console (hvc0).
+
+---
+
 ### chvm list
 
 List VMs.
