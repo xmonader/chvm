@@ -58,8 +58,12 @@ pub fn build_args(config: &VmConfig, vm_dir: &Path) -> Vec<String> {
         }
     }
 
+    // Guest init stdio goes to console.log through the virtio console (hvc0).
+    // The serial port is a PTY allocated by cloud-hypervisor: kernel messages
+    // and panics land there even if guest init or the vsock path is broken,
+    // and `chvm console` attaches to it as a rescue shell.
     push_arg(&mut args, "--console", format!("file={log_path}"));
-    push_arg(&mut args, "--serial", "off");
+    push_arg(&mut args, "--serial", "pty");
 
     if let Some(ref tap) = config.network.tap_device {
         let mut net_arg = format!("tap={tap}");
@@ -267,5 +271,35 @@ mod tests {
             args[disk_positions[0] + 1],
             "path=/rootfs.sock,image_type=raw"
         );
+    }
+
+    #[test]
+    fn build_args_uses_serial_pty_for_rescue_console() {
+        let config = sample_vm_config(RootfsType::VirtioFs, vec![]);
+
+        let args = build_args(&config, Path::new("/vm"));
+        let serial_positions: Vec<_> = args
+            .iter()
+            .enumerate()
+            .filter_map(|(idx, arg)| (arg == "--serial").then_some(idx))
+            .collect();
+
+        assert_eq!(serial_positions.len(), 1);
+        assert_eq!(args[serial_positions[0] + 1], "pty");
+    }
+
+    #[test]
+    fn build_args_keeps_console_log_for_guest_stdio() {
+        let config = sample_vm_config(RootfsType::VirtioFs, vec![]);
+
+        let args = build_args(&config, Path::new("/vm"));
+        let console_positions: Vec<_> = args
+            .iter()
+            .enumerate()
+            .filter_map(|(idx, arg)| (arg == "--console").then_some(idx))
+            .collect();
+
+        assert_eq!(console_positions.len(), 1);
+        assert_eq!(args[console_positions[0] + 1], "file=/vm/console.log");
     }
 }

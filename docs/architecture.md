@@ -189,7 +189,7 @@ chvm run -d --name myvm -e FOO=bar -p 8080:80 alpine:latest sleep 3600
 5. Load kernel modules (vsock, virtiofs) via `init_module` syscall
 6. Mount any virtiofs volumes
 7. Start mycelium daemon if configured
-8. Start vsock servers for exec (port 1024) and shell (port 1025)
+8. Start vsock servers for exec (port 1024) and shell (port 1025), plus the serial rescue shell on /dev/ttyS0
 9. Parse and execute the user's command
 10. On exit, power off the VM
 
@@ -220,6 +220,17 @@ Streams OUTPUT: lines back, then ExecResponse JSON with exit code
 ### Attach Path
 
 Similar to exec but uses port 1025. The guest `shell_handler` allocates a PTY, spawns a shell (ash/bash/sh), and bidirectionally proxies between the vsock socket and the PTY master fd. The host proxy bridges stdin/stdout with the vsock stream using raw mode terminal.
+
+### Serial Rescue Console Path
+
+The vsock paths above depend on guest init having booted far enough to accept vsock connections. For the case where it hasn't, every VM also gets a serial rescue console:
+
+1. chvm launches cloud-hypervisor with `--serial pty`. CH allocates a PTY and reports the slave path through its API socket (`vm.info` → `config.serial.file`).
+2. The kernel cmdline carries `console=ttyS0 console=hvc0`: kernel messages and panics go to both consoles, while `/dev/console` (guest init stdio, and therefore `chvm logs`) stays on the virtio console (hvc0), because the kernel opens the *last* `console=` parameter as `/dev/console`.
+3. chvm-init spawns a `/bin/sh` session leader with its stdio on `/dev/ttyS0`, right after the vsock servers. It is pure best-effort: if `/dev/ttyS0` is missing or the spawn fails, boot continues with a warning.
+4. `chvm console <vm>` resolves the VM's `api.sock`, asks the VMM for the PTY path, puts the local terminal in raw mode, and splices stdin ↔ PTY. `Ctrl+Q` detaches; a PTY read returning EIO (VM shut down) exits cleanly and restores the terminal.
+
+So even with broken guest init, broken networking, or a dead vsock server, `chvm console` yields kernel logs up to the failure point plus a root shell for repair.
 
 ## State Machine
 

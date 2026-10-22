@@ -6,6 +6,7 @@ mod mounts;
 mod mycelium;
 mod network;
 mod rootfs;
+mod serial_console;
 mod shell_handler;
 mod signal;
 mod vsock_server;
@@ -62,6 +63,11 @@ fn main() {
     // DHCP attempt must never gate the vsock path.
     std::thread::spawn(vsock_server::run_exec_server);
     std::thread::spawn(vsock_server::run_shell_server);
+
+    // Serial rescue console: a /bin/sh on /dev/ttyS0, reachable from the host
+    // via `chvm console` even when the main command, networking, or the vsock
+    // path are broken. Best-effort — never blocks boot.
+    std::thread::spawn(serial_console::run_rescue_shell);
 
     // Setup network (best-effort; a leaseless bridge degrades to a no-IP warning)
     if let Err(e) = network::setup_network() {
