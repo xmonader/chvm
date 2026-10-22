@@ -526,6 +526,7 @@ impl VmManager {
             virtiofs_socket: storage_result.socket_path.clone(),
             virtiofs_pid: storage_result.virtiofs_pid,
             block_device: storage_result.block_device.clone(),
+            block_format: storage_result.block_format.clone(),
             overlay_dir: storage_result.overlay_dir.clone(),
             overlay_backing_dir: storage_result.overlay_backing_dir.clone(),
         });
@@ -533,8 +534,10 @@ impl VmManager {
         // Update rootfs source to point to prepared storage
         if let Some(ref block) = storage_result.block_device {
             state.vm_config.rootfs.source = block.clone();
+            state.vm_config.rootfs.block_format = storage_result.block_format.clone();
         } else if let Some(ref sock) = storage_result.socket_path {
             state.vm_config.rootfs.source = sock.clone();
+            state.vm_config.rootfs.block_format = None;
         }
 
         // Setup network. A VM the user asked to be networked must not silently
@@ -1831,6 +1834,7 @@ mod tests {
                     read_only: false,
                     block_disk_size_bytes: None,
                     writable_quota_bytes: None,
+                    block_format: None,
                 },
                 network: NetworkConfig {
                     mode: NetworkMode::None,

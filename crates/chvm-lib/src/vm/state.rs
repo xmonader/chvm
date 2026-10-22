@@ -98,6 +98,11 @@ pub struct RootfsConfig {
     pub block_disk_size_bytes: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub writable_quota_bytes: Option<u64>,
+    /// Disk image format of `source` when it is a virtio-block device
+    /// (`raw`, `qcow2`). Set from the storage backend at start time;
+    /// absent means the historical raw default.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub block_format: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -384,6 +389,7 @@ mod tests {
                 read_only: false,
                 block_disk_size_bytes: None,
                 writable_quota_bytes: None,
+                block_format: None,
             },
             network: NetworkConfig {
                 mode: NetworkMode::Tap,
@@ -430,6 +436,7 @@ mod tests {
                 read_only: false,
                 block_disk_size_bytes: None,
                 writable_quota_bytes: None,
+                block_format: None,
             },
             network: NetworkConfig {
                 mode: NetworkMode::Tap,
@@ -476,6 +483,7 @@ mod tests {
                 read_only: false,
                 block_disk_size_bytes: None,
                 writable_quota_bytes: None,
+                block_format: None,
             },
             network: NetworkConfig {
                 mode: NetworkMode::Tap,
@@ -740,6 +748,8 @@ pub struct StorageState {
     pub virtiofs_pid: Option<i32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub block_device: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub block_format: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub overlay_dir: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

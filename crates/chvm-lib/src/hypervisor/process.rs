@@ -44,14 +44,16 @@ pub fn build_args(config: &VmConfig, vm_dir: &Path) -> Vec<String> {
             fs_entries.push(format!("tag=rootfs,socket={}", config.rootfs.source));
         }
         RootfsType::VirtioBlock => {
-            // image_type=raw is mandatory: cloud-hypervisor v52+ auto-detects
-            // raw images and disables sector-0 writes, which breaks ext4
-            // root filesystems (superblock lives in block 0) and panics the
-            // guest. Auto-detection is also deprecated.
+            // image_type is explicit and mandatory: cloud-hypervisor v52+
+            // auto-detects raw and disables sector-0 writes, breaking ext4
+            // root filesystems; qcow2 overlays must be declared as well
+            // (auto-detection is deprecated). Format comes from the storage
+            // backend (raw is the default when absent).
+            let format = config.rootfs.block_format.as_deref().unwrap_or("raw");
             push_arg(
                 &mut args,
                 "--disk",
-                format!("path={},image_type=raw", config.rootfs.source),
+                format!("path={},image_type={format}", config.rootfs.source),
             );
         }
     }
@@ -199,6 +201,7 @@ mod tests {
                 read_only: false,
                 block_disk_size_bytes: None,
                 writable_quota_bytes: None,
+                block_format: None,
             },
             network: NetworkConfig {
                 mode: crate::vm::state::NetworkMode::None,

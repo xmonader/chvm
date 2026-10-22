@@ -237,6 +237,7 @@ impl VmBuilder {
                 read_only: false,
                 block_disk_size_bytes,
                 writable_quota_bytes,
+                block_format: None,
             },
             network: NetworkConfig {
                 mode: network_mode,
