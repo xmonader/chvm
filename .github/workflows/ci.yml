@@ -16,9 +16,9 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          components: rustfmt, clippy
+        # Toolchain (and rustfmt/clippy) pinned by rust-toolchain.toml so
+        # -D warnings builds don't break when a new stable clippy ships.
+        uses: dtolnay/rust-toolchain@master
 
       - name: Cache cargo
         uses: actions/cache@v4
