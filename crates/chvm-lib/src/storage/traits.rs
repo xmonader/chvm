@@ -23,6 +23,9 @@ pub struct StorageResult {
 }
 
 /// Storage backend trait.
+// async_trait stamps `#[must_use]` on methods that already return a must-use
+// boxed future; newer clippy's double_must_use flags the expansion.
+#[allow(clippy::double_must_use)]
 #[async_trait::async_trait]
 pub trait StorageBackend: Send + Sync {
     fn name(&self) -> &str;
