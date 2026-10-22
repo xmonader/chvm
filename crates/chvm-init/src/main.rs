@@ -44,20 +44,34 @@ fn main() {
         println!("[init] Rootfs already mounted (block device boot)");
     }
 
-    // Setup network
+    // Load kernel modules needed for vsock and virtiofs. This must run before
+    // the vsock servers below (they bind AF_VSOCK) and before mount_volumes
+    // (needs the virtiofs module).
+    load_kernel_modules();
+
+    // Block SIGCHLD on the main thread before spawning any threads that in
+    // turn spawn children, so every thread (including the vsock servers)
+    // inherits the blocked mask and the reaper can catch SIGCHLD reliably
+    // via sigtimedwait.
+    signal::block_sigchld();
+
+    // Start vsock servers in background threads BEFORE configuring the
+    // network. The exec/shell servers only depend on the vsock module (loaded
+    // above), not on eth0. Binding them first guarantees chvm exec/attach can
+    // connect even when network setup degrades (e.g. a leaseless bridge): a
+    // DHCP attempt must never gate the vsock path.
+    std::thread::spawn(vsock_server::run_exec_server);
+    std::thread::spawn(vsock_server::run_shell_server);
+
+    // Setup network (best-effort; a leaseless bridge degrades to a no-IP warning)
     if let Err(e) = network::setup_network() {
         eprintln!("[init] Warning: Failed to setup network: {e}");
     }
-
-    // Load kernel modules needed for vsock and virtiofs (before volume mounts)
-    load_kernel_modules();
 
     // Mount additional volumes (needs virtiofs module loaded)
     if let Err(e) = mounts::mount_volumes() {
         eprintln!("[init] Warning: Failed to mount volumes: {e}");
     }
-
-    signal::block_sigchld();
 
     // Setup and spawn mycelium if configured
     let mycelium_state = match mycelium::setup_mycelium() {
@@ -79,17 +93,20 @@ fn main() {
         libc::sethostname(c"chvm".as_ptr(), 4);
     }
 
-    // Start vsock servers in background threads
-    std::thread::spawn(vsock_server::run_exec_server);
-    std::thread::spawn(vsock_server::run_shell_server);
-
     // Execute the main process
     let cmd_path = &config.cmd[0];
     let cmd_args = &config.cmd[1..];
 
+    // Look up command in PATH if not absolute
+    let resolved = if !cmd_path.starts_with('/') {
+        helpers::find_binary(cmd_path, &[]).unwrap_or_else(|| cmd_path.clone())
+    } else {
+        cmd_path.clone()
+    };
+
     println!("[init] Executing: {:?}", config.cmd);
 
-    let mut cmd = Command::new(cmd_path);
+    let mut cmd = Command::new(&resolved);
     cmd.args(cmd_args);
 
     // Set environment
