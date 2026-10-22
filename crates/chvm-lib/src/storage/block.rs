@@ -47,7 +47,12 @@ impl StorageBackend for BlockStorage {
                     disk = %vm_disk.display(),
                     "Creating per-VM qcow2 overlay disk"
                 );
-                super::overlay::create_overlay(&base, &vm_disk, config.block_disk_size_bytes)?;
+                super::overlay::create_overlay(
+                    &base,
+                    &vm_disk,
+                    super::overlay::BASE_FORMAT_RAW,
+                    config.block_disk_size_bytes,
+                )?;
             } else if let Some(size) = config.block_disk_size_bytes {
                 // Overlay from a previous boot: only ever grow it.
                 super::overlay::resize_grow_only(&vm_disk, size)?;
@@ -222,10 +227,12 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let rootfs = dir.path().join("rootfs");
         std::fs::create_dir_all(&rootfs).unwrap();
-        // Pre-create a real qcow2 base so no mkfs/mount (root) is needed.
+        // Pre-create a real raw base so no mkfs/mount (root) is needed. The
+        // production base is a raw ext4 image, so the overlay must declare
+        // `-F raw` — a qcow2 base here would mask format mismatches.
         let base = base_image_path(&rootfs);
         let output = std::process::Command::new(super::super::overlay::qemu_img().unwrap())
-            .args(["create", "-f", "qcow2"])
+            .args(["create", "-f", super::super::overlay::BASE_FORMAT_RAW])
             .arg(&base)
             .arg((64 * 1024 * 1024).to_string())
             .output()

@@ -7,8 +7,9 @@
 //! Rules (see the qcow2 snapshot design doc):
 //! - Bases are immutable: `chmod 0444` after build, never modify them while
 //!   overlays reference them.
-//! - The backing format is passed explicitly (`-F qcow2`); without it qemu
-//!   warns and guesses raw, which is a security footgun.
+//! - The backing format is passed explicitly (`-F raw` for our ext4 bases);
+//!   without it qemu warns and guesses, which is a security footgun, and
+//!   declaring the wrong format makes qemu-img refuse the backing file.
 //! - Backing paths are absolute so instance dirs can be moved around.
 //! - Resizing is grow-only; shrinking corrupts the guest filesystem.
 
@@ -38,14 +39,17 @@ pub fn qemu_img() -> Option<PathBuf> {
     which::which("qemu-img").ok()
 }
 
+/// Backing-file format of the ext4 bases chvm builds (raw filesystem image).
+pub const BASE_FORMAT_RAW: &str = "raw";
+
 /// Argument vector for `qemu-img create` (pure, for testability).
-fn create_args(base: &Path, dest: &Path) -> Vec<String> {
+fn create_args(base: &Path, dest: &Path, backing_format: &str) -> Vec<String> {
     vec![
         "create".to_string(),
         "-f".to_string(),
         QCOW2_FORMAT.to_string(),
         "-F".to_string(),
-        QCOW2_FORMAT.to_string(),
+        backing_format.to_string(),
         "-b".to_string(),
         base.to_string_lossy().into_owned(),
         dest.to_string_lossy().into_owned(),
@@ -108,15 +112,27 @@ fn info(qemu_img: &Path, disk: &Path) -> anyhow::Result<QemuImgInfo> {
 
 /// Create a qcow2 overlay at `dest` with `base` as its backing file.
 ///
-/// The base path is canonicalized so the overlay records an absolute backing
-/// path that survives moves of the VM dir. When `size_bytes` is given and
-/// exceeds the overlay's virtual size, it is grown (grow-only).
-pub fn create_overlay(base: &Path, dest: &Path, size_bytes: Option<u64>) -> anyhow::Result<()> {
+/// `backing_format` must match the base's actual format (`raw` for the ext4
+/// bases chvm builds — declaring the wrong format makes qemu-img refuse the
+/// backing file). The base path is canonicalized so the overlay records an
+/// absolute backing path that survives moves of the VM dir. When
+/// `size_bytes` is given and exceeds the overlay's virtual size, it is grown
+/// (grow-only).
+pub fn create_overlay(
+    base: &Path,
+    dest: &Path,
+    backing_format: &str,
+    size_bytes: Option<u64>,
+) -> anyhow::Result<()> {
     let qemu_img = qemu_img().ok_or_else(|| anyhow::anyhow!("qemu-img not found"))?;
     let base_abs = std::fs::canonicalize(base)
         .map_err(|e| anyhow::anyhow!("canonicalize base image {}: {e}", base.display()))?;
 
-    run(&qemu_img, &create_args(&base_abs, dest), "create")?;
+    run(
+        &qemu_img,
+        &create_args(&base_abs, dest, backing_format),
+        "create",
+    )?;
     info!(
         base = %base_abs.display(),
         dest = %dest.display(),
@@ -177,6 +193,7 @@ mod tests {
         let args = create_args(
             Path::new("/data/images/digest/rootfs.ext4.img"),
             Path::new("/data/vms/vm1/rootfs.qcow2"),
+            BASE_FORMAT_RAW,
         );
         assert_eq!(
             args,
@@ -185,7 +202,7 @@ mod tests {
                 "-f",
                 "qcow2",
                 "-F",
-                "qcow2",
+                "raw",
                 "-b",
                 "/data/images/digest/rootfs.ext4.img",
                 "/data/vms/vm1/rootfs.qcow2",
@@ -254,7 +271,7 @@ mod tests {
     fn create_base(dir: &Path, name: &str, size: u64) -> PathBuf {
         let base = dir.join(name);
         std::process::Command::new(qemu_img().unwrap())
-            .args(["create", "-f", "qcow2"])
+            .args(["create", "-f", BASE_FORMAT_RAW])
             .arg(&base)
             .arg(size.to_string())
             .output()
@@ -287,7 +304,7 @@ mod tests {
         let dotty_base = base.parent().unwrap().join(".").join("base.qcow2");
         let overlay = dir.path().join("vm").join("rootfs.qcow2");
         std::fs::create_dir_all(overlay.parent().unwrap()).unwrap();
-        create_overlay(&dotty_base, &overlay, Some(128 * MIB)).unwrap();
+        create_overlay(&dotty_base, &overlay, BASE_FORMAT_RAW, Some(128 * MIB)).unwrap();
 
         assert!(overlay.exists());
         assert!(
@@ -311,7 +328,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let base = create_base(dir.path(), "base.qcow2", 64 * MIB);
         let overlay = dir.path().join("rootfs.qcow2");
-        create_overlay(&base, &overlay, Some(32 * MIB)).unwrap();
+        create_overlay(&base, &overlay, BASE_FORMAT_RAW, Some(32 * MIB)).unwrap();
 
         assert_eq!(virtual_size(&overlay), 64 * MIB);
     }

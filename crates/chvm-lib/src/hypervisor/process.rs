@@ -49,12 +49,23 @@ pub fn build_args(config: &VmConfig, vm_dir: &Path) -> Vec<String> {
             // root filesystems; qcow2 overlays must be declared as well
             // (auto-detection is deprecated). Format comes from the storage
             // backend (raw is the default when absent).
+            //
+            // qcow2 overlays reference a backing file, and cloud-hypervisor
+            // v54 only follows backing chains when `backing_files=on` is
+            // given (the default is off, which rejects any qcow2 with a
+            // backing file as MaxNestingDepthExceeded). Raw images have no
+            // chain, so the flag is only meaningful (and only added) for
+            // qcow2.
             let format = config.rootfs.block_format.as_deref().unwrap_or("raw");
-            push_arg(
-                &mut args,
-                "--disk",
-                format!("path={},image_type={format}", config.rootfs.source),
-            );
+            let disk = if format == "qcow2" {
+                format!(
+                    "path={},image_type={format},backing_files=on",
+                    config.rootfs.source
+                )
+            } else {
+                format!("path={},image_type={format}", config.rootfs.source)
+            };
+            push_arg(&mut args, "--disk", disk);
         }
     }
 
@@ -270,6 +281,27 @@ mod tests {
         assert_eq!(
             args[disk_positions[0] + 1],
             "path=/rootfs.sock,image_type=raw"
+        );
+    }
+
+    #[test]
+    fn build_args_enables_backing_files_for_qcow2_overlays() {
+        // cloud-hypervisor v54 rejects qcow2 images with a backing file
+        // unless backing_files=on is passed (default is off).
+        let mut config = sample_vm_config(RootfsType::VirtioBlock, vec![]);
+        config.rootfs.block_format = Some("qcow2".into());
+
+        let args = build_args(&config, Path::new("/vm"));
+        let disk_positions: Vec<_> = args
+            .iter()
+            .enumerate()
+            .filter_map(|(idx, arg)| (arg == "--disk").then_some(idx))
+            .collect();
+
+        assert_eq!(disk_positions.len(), 1);
+        assert_eq!(
+            args[disk_positions[0] + 1],
+            "path=/rootfs.sock,image_type=qcow2,backing_files=on"
         );
     }
 

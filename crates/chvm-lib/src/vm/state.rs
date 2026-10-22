@@ -588,6 +588,7 @@ mod tests {
                     read_only: false,
                     block_disk_size_bytes: None,
                     writable_quota_bytes: None,
+                    block_format: None,
                 },
                 network: NetworkConfig {
                     mode: NetworkMode::None,
