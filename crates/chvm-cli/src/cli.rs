@@ -100,6 +100,9 @@ pub enum Commands {
     /// Show resource usage statistics for a container
     Stats(StatsArgs),
 
+    /// Show lifecycle transition history of a container
+    Events(EventsArgs),
+
     /// List images
     Images(ImagesArgs),
 
@@ -350,6 +353,13 @@ pub struct StatsArgs {
     /// Output in JSON format
     #[arg(long)]
     pub json: bool,
+}
+
+#[derive(clap::Args)]
+pub struct EventsArgs {
+    /// Container ID or name
+    #[arg(add = ArgValueCompleter::new(complete_vm))]
+    pub container: String,
 }
 
 #[derive(clap::Args)]

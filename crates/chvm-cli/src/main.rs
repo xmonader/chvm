@@ -32,6 +32,27 @@ async fn main() -> anyhow::Result<()> {
         .without_time()
         .init();
 
+    // Privilege gates: mutating commands need root; read-only commands also
+    // accept membership in the 'chvm' group (see docs/security.md).
+    let ungated = matches!(
+        &cli.command,
+        Commands::Version(_) | Commands::Login(_) | Commands::Logout(_)
+    );
+    if !ungated {
+        let check = match &cli.command {
+            Commands::List(_)
+            | Commands::Logs(_)
+            | Commands::Inspect(_)
+            | Commands::Stats(_)
+            | Commands::Images(_)
+            | Commands::Events(_) => chvm_lib::permissions::check_read_access(),
+            _ => chvm_lib::permissions::check_mutation_access(),
+        };
+        if let Err(msg) = check {
+            anyhow::bail!(msg);
+        }
+    }
+
     // Handle commands that don't need a full manager
     match &cli.command {
         Commands::Version(args) => return commands::version::execute(args),
@@ -64,6 +85,7 @@ async fn main() -> anyhow::Result<()> {
         Commands::Logs(args) => commands::logs::execute(&mut manager, args),
         Commands::Inspect(args) => commands::inspect::execute(&mut manager, args).await,
         Commands::Stats(args) => commands::stats::execute(&mut manager, args).await,
+        Commands::Events(args) => commands::events::execute(&mut manager, args),
         Commands::Images(args) => commands::images::execute(&mut manager, args),
         Commands::Rmi(args) => commands::images::execute_remove(&mut manager, args),
         Commands::Prune(args) => commands::prune::execute(&mut manager, args).await,

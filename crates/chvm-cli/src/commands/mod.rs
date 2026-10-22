@@ -2,6 +2,7 @@ pub mod attach;
 pub mod console;
 pub mod create;
 pub mod doctor;
+pub mod events;
 pub mod exec;
 pub mod images;
 pub mod inspect;
