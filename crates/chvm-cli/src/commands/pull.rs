@@ -13,10 +13,10 @@ pub async fn execute(manager: &mut VmManager, args: &PullArgs) -> anyhow::Result
     };
     println!(
         "{}: Pulling from {}",
-        &args.image,
+        args.image,
         cached.refs.first().unwrap_or(&args.image)
     );
     println!("Digest: {}", cached.digest);
-    println!("Status: Downloaded newer image for {}", &args.image);
+    println!("Status: Downloaded newer image for {}", args.image);
     Ok(())
 }
