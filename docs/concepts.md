@@ -375,6 +375,7 @@ All VM state is on disk as JSON + files:
     index.json                   # Image cache index (ref -> digest mapping)
     <digest>/
       rootfs/                    # Extracted OCI layers (the filesystem tree)
+      rootfs.ext4.img            # Immutable ext4 base (chmod 0444); backing for per-VM qcow2 overlays
       layer-0-<hash>.tar.gz     # Raw downloaded layers
       layer-1-<hash>.tar.gz
   bin/
@@ -382,8 +383,8 @@ All VM state is on disk as JSON + files:
     mycelium                     # Mycelium binary (optional)
   vms/
     <vm-id>/
-      state.json                 # RuntimeState (config, status, timestamps)
-      rootfs.img                 # ext4 block device (block backend)
+      state.json                 # RuntimeState (config, status, transitions, schema_version)
+      rootfs.qcow2               # Per-VM qcow2 overlay over the image base (block backend)
       storage/                   # virtiofs overlay + socket (virtiofs backend)
         overlay/
           upper/                 # Writable layer
@@ -392,7 +393,7 @@ All VM state is on disk as JSON + files:
         virtiofsd.sock
       api.sock                   # Cloud Hypervisor REST API socket
       vsock.sock                 # Cloud Hypervisor vsock proxy socket
-      console.log                # Guest serial console output
+      console.log                # Guest stdio output (hvc0)
       cloud-hypervisor.log       # CH process log
       mount-N/                   # Volume mount virtiofsd instances
         storage/

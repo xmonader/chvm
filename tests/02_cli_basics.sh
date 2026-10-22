@@ -12,7 +12,7 @@ test_start "02 — CLI Basics"
 # 1. --help lists all expected subcommands
 help_output=$($CHVM --help 2>&1)
 all_found=true
-for subcmd in pull run create start stop rm exec attach list logs inspect images prune doctor setup kernel version; do
+for subcmd in pull run create start stop rm exec attach console list logs inspect stats events images prune doctor setup kernel version; do
     if ! echo "$help_output" | grep -qw "$subcmd"; then
         fail "--help lists subcommand '$subcmd'" "Not found in help output"
         all_found=false

@@ -6,17 +6,21 @@ chvm lets you pull OCI container images and run them as hardware-isolated virtua
 
 ## Features
 
-- **Docker-like CLI** -- `chvm run`, `chvm exec`, `chvm attach`, `chvm stop`, `chvm rm`
+- **Docker-like CLI** -- `chvm run`, `chvm exec`, `chvm attach`, `chvm console`, `chvm stop`, `chvm rm`
 - **OCI image support** -- Pull images from Docker Hub and other OCI-compatible registries
 - **Registry authentication** -- `chvm login`/`chvm logout` with credentials stored in `~/.docker/config.json`
 - **Fast boot** -- MicroVMs start in 2-5 seconds
+- **Copy-on-write disks** -- Per-VM qcow2 overlays over an immutable per-image base: instant disk creation, grow-only resize
 - **TAP networking** -- Bridge-based networking with NAT, port forwarding, and DNS
 - **Mycelium networking** -- Peer-to-peer IPv6 overlay network with automatic binary injection and IP tracking
 - **Volume mounts** -- Share host directories with VMs via virtiofs
 - **Exec & attach** -- Execute commands or get an interactive shell via vsock
+- **Serial rescue console** -- `chvm console` opens an interactive shell on the VM's serial port even if networking or vsock is broken
+- **Lifecycle audit trail** -- `chvm events` shows the validated state-transition history with reasons; crashed VMs are marked Failed (not Stopped)
 - **Kernel management** -- Extract, select, and check host kernels automatically
 - **Resource cleanup** -- Automatic garbage collection of leaked TAP devices and iptables rules from crashed VMs
 - **Resource control** -- Configure vCPUs, memory, environment variables per VM
+- **Security model** -- Root-only mutations, `chvm` group for read-only access; cloud-hypervisor and virtiofsd run sandboxed with seccomp (see docs/security.md)
 - **Short ID resolution** -- Reference VMs by name, full ID, or unique ID prefix (e.g., `chvm stop a1b`)
 - **Tab completion** -- Dynamic shell completions for commands, flags, and VM names/IDs
 

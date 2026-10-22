@@ -90,11 +90,11 @@ if wait_vm_running "${TEST_PREFIX}-gc-crash" 30; then
             skip "TAP cleanup on crash" "TAP device was not created"
         fi
 
-        # Verify VM is marked as stopped
-        if $CHVM list --all 2>/dev/null | grep -qi "${TEST_PREFIX}-gc-crash.*stopped"; then
-            pass "refresh_status marks crashed VM as stopped"
+        # Verify VM is marked as failed (crashed without a stop request)
+        if $CHVM list --all 2>/dev/null | grep -qi "${TEST_PREFIX}-gc-crash.*failed"; then
+            pass "refresh_status marks crashed VM as failed"
         else
-            fail "refresh_status marks crashed VM as stopped" "VM not in stopped state"
+            fail "refresh_status marks crashed VM as failed" "VM not in failed state"
         fi
     else
         skip "Crash cleanup test" "Could not get VMM PID"
