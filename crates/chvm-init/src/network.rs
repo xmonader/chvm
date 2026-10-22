@@ -81,7 +81,12 @@ pub fn setup_network() -> Result<(), Box<dyn std::error::Error>> {
         let mut found = false;
         for d in &dhcp_clients {
             if std::path::Path::new(d).exists() {
-                match Command::new(d).arg("eth0").output() {
+                // Bound the DHCP attempt so a leaseless bridge degrades to a
+                // no-IP warning instead of blocking boot forever: busybox
+                // udhcpc retries indefinitely and ISC dhclient backs off
+                // indefinitely, and `.output()` above would hang init.
+                let args = dhcp_client_args(d);
+                match Command::new(d).args(&args).output() {
                     Ok(output) if !output.status.success() => {
                         eprintln!(
                             "[init] Warning: DHCP client {d} failed: {}",
@@ -108,6 +113,30 @@ pub fn setup_network() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     Ok(())
+}
+
+/// Build a bounded argument list for the given DHCP client binary.
+///
+/// A leaseless network must not block boot: without these flags busybox
+/// `udhcpc` retries forever and ISC `dhclient` backs off indefinitely.
+/// - udhcpc: `-i eth0 -n -q -t 3 -T 3` -> at most 3 discovers, 3s apart,
+///   then exit (`-n`) after acquiring or failing (`-q`).
+/// - dhclient: `-1 eth0` -> try once, exit if no lease is obtained.
+fn dhcp_client_args(client_path: &str) -> Vec<String> {
+    let is_udhcpc = std::path::Path::new(client_path)
+        .file_name()
+        .and_then(|n| n.to_str())
+        .map(|n| n.contains("udhcpc"))
+        .unwrap_or(false);
+
+    if is_udhcpc {
+        ["-i", "eth0", "-n", "-q", "-t", "3", "-T", "3"]
+            .iter()
+            .map(ToString::to_string)
+            .collect()
+    } else {
+        ["-1", "eth0"].iter().map(ToString::to_string).collect()
+    }
 }
 
 /// Run an `ip` command best-effort. Returns true if the command succeeded.
@@ -332,5 +361,23 @@ mod tests {
         let addr = Ipv4Addr::new(192, 168, 200, 2);
         let sockaddr = sockaddr_from_ipv4(addr);
         assert_eq!(sockaddr_to_ipv4(sockaddr).unwrap(), addr);
+    }
+
+    #[test]
+    fn dhcp_client_args_bounds_udhcpc() {
+        let args = dhcp_client_args("/sbin/udhcpc");
+        assert_eq!(args, ["-i", "eth0", "-n", "-q", "-t", "3", "-T", "3"]);
+    }
+
+    #[test]
+    fn dhcp_client_args_bounds_dhclient() {
+        let args = dhcp_client_args("/usr/sbin/dhclient");
+        assert_eq!(args, ["-1", "eth0"]);
+    }
+
+    #[test]
+    fn dhcp_client_args_detects_client_by_filename() {
+        assert_eq!(dhcp_client_args("/bin/udhcpc")[1..3], ["eth0", "-n"]);
+        assert_eq!(dhcp_client_args("/sbin/dhclient"), ["-1", "eth0"]);
     }
 }
