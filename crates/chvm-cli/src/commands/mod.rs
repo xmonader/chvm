@@ -1,4 +1,5 @@
 pub mod attach;
+pub mod console;
 pub mod create;
 pub mod doctor;
 pub mod exec;

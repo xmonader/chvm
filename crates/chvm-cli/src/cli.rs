@@ -84,6 +84,9 @@ pub enum Commands {
     /// Attach to a running container
     Attach(AttachArgs),
 
+    /// Open the serial rescue console of a running container
+    Console(ConsoleArgs),
+
     /// List containers
     #[command(alias = "ps", alias = "ls")]
     List(ListArgs),
@@ -297,6 +300,13 @@ pub struct ExecArgs {
 
 #[derive(clap::Args)]
 pub struct AttachArgs {
+    /// Container ID or name
+    #[arg(add = ArgValueCompleter::new(complete_vm))]
+    pub container: String,
+}
+
+#[derive(clap::Args)]
+pub struct ConsoleArgs {
     /// Container ID or name
     #[arg(add = ArgValueCompleter::new(complete_vm))]
     pub container: String,
