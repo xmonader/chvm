@@ -555,6 +555,147 @@ mod tests {
         let pf: PortForward = "8080:80".parse().unwrap();
         assert_eq!(pf.protocol, "tcp");
     }
+
+    // RuntimeState schema versioning + transition ring tests
+
+    fn sample_runtime_state() -> RuntimeState {
+        RuntimeState {
+            id: "vm1".to_string(),
+            name: "vm1".to_string(),
+            image_ref: "alpine:latest".to_string(),
+            image_digest: None,
+            vm_config: VmConfig {
+                id: "vm1".to_string(),
+                name: "vm1".to_string(),
+                vcpu: 1,
+                memory_mb: 512,
+                kernel: KernelConfig {
+                    path: "/kernel".to_string(),
+                    cmdline: "console=ttyS0".to_string(),
+                    initrd_path: None,
+                },
+                rootfs: RootfsConfig {
+                    source: "/rootfs".to_string(),
+                    rootfs_type: RootfsType::VirtioBlock,
+                    read_only: false,
+                    block_disk_size_bytes: None,
+                    writable_quota_bytes: None,
+                },
+                network: NetworkConfig {
+                    mode: NetworkMode::None,
+                    tap_device: None,
+                    mac_address: None,
+                    ip_address: None,
+                    gateway: None,
+                    port_forwards: vec![],
+                    mycelium_peers: vec![],
+                    mycelium_key: None,
+                },
+                init: InitConfig {
+                    cmd: vec!["/bin/sh".to_string()],
+                    env: vec![],
+                    working_dir: None,
+                },
+                mounts: vec![],
+                log_path: None,
+                vsock_cid: 3,
+                state_dir: None,
+            },
+            status: VmState::Running,
+            schema_version: CURRENT_SCHEMA_VERSION,
+            stop_requested: false,
+            status_since: None,
+            transitions: vec![],
+            vmm_pid: 42,
+            exit_code: None,
+            network_state: None,
+            storage_state: None,
+            network_ownership: None,
+            created_at: Utc::now(),
+            started_at: None,
+            stopped_at: None,
+        }
+    }
+
+    #[test]
+    fn legacy_state_file_deserializes_with_defaults() {
+        // A v1 state.json carries none of the FSM/crash-semantics fields.
+        let mut value = serde_json::to_value(sample_runtime_state()).unwrap();
+        for key in [
+            "schema_version",
+            "stop_requested",
+            "status_since",
+            "transitions",
+        ] {
+            value.as_object_mut().unwrap().remove(key);
+        }
+        let legacy_json = serde_json::to_string(&value).unwrap();
+
+        let state: RuntimeState = serde_json::from_str(&legacy_json).unwrap();
+        assert_eq!(state.status, VmState::Running);
+        assert_eq!(state.schema_version, 1, "absent field means legacy v1");
+        assert!(!state.stop_requested);
+        assert!(state.status_since.is_none());
+        assert!(state.transitions.is_empty());
+    }
+
+    #[test]
+    fn backfill_schema_version_upgrades_legacy_state() {
+        let mut state = sample_runtime_state();
+        state.schema_version = 1;
+        state.backfill_schema_version();
+        assert_eq!(state.schema_version, CURRENT_SCHEMA_VERSION);
+
+        // Already-current state is left alone.
+        let mut current = sample_runtime_state();
+        current.backfill_schema_version();
+        assert_eq!(current.schema_version, CURRENT_SCHEMA_VERSION);
+    }
+
+    #[test]
+    fn new_state_files_carry_current_schema_version() {
+        let state = sample_runtime_state();
+        let value = serde_json::to_value(&state).unwrap();
+        assert_eq!(value["schema_version"], CURRENT_SCHEMA_VERSION);
+    }
+
+    #[test]
+    fn record_transition_appends_history_and_stamps_status_since() {
+        let mut state = sample_runtime_state();
+        state.status = VmState::Running;
+
+        state.record_transition(VmState::Stopped, "stopped by request");
+
+        assert_eq!(state.status, VmState::Stopped);
+        assert_eq!(state.transitions.len(), 1);
+        let rec = &state.transitions[0];
+        assert_eq!(rec.from, VmState::Running);
+        assert_eq!(rec.to, VmState::Stopped);
+        assert_eq!(rec.reason, "stopped by request");
+        assert!(!rec.at.is_empty());
+        assert_eq!(state.status_since.as_deref(), Some(rec.at.as_str()));
+    }
+
+    #[test]
+    fn transition_ring_caps_at_capacity() {
+        let mut state = sample_runtime_state();
+
+        // Exceed the ring capacity twice over; only the most recent
+        // TRANSITION_RING_CAPACITY entries survive, in order.
+        for i in 0..(TRANSITION_RING_CAPACITY + 10) {
+            let to = if i % 2 == 0 {
+                VmState::Stopped
+            } else {
+                VmState::Running
+            };
+            state.record_transition(to, &format!("cycle {i}"));
+        }
+
+        assert_eq!(state.transitions.len(), TRANSITION_RING_CAPACITY);
+        assert_eq!(state.transitions.first().unwrap().reason, "cycle 10");
+        assert_eq!(state.transitions.last().unwrap().reason, "cycle 41");
+        assert_eq!(state.transitions.last().unwrap().to, VmState::Running);
+    }
 }
 
 impl VmConfig {
@@ -617,6 +758,32 @@ pub struct NetworkOwnership {
     pub iptables_rules: Vec<String>,
 }
 
+/// Current on-disk schema version for `RuntimeState` (`state.json`).
+///
+/// Version 1 is everything written before the FSM/crash-semantics work: no
+/// `schema_version`, `stop_requested`, `status_since`, or `transitions`
+/// fields. Such files load via `#[serde(default)]` into schema_version 1 and
+/// are backfilled to `CURRENT_SCHEMA_VERSION` on the next save.
+pub const CURRENT_SCHEMA_VERSION: u32 = 2;
+
+/// Bounded ring-buffer capacity for `RuntimeState::transitions`.
+pub const TRANSITION_RING_CAPACITY: usize = 32;
+
+/// One recorded status change: when it happened, which FSM edge was taken and why.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TransitionRecord {
+    /// RFC3339 timestamp of the transition.
+    pub at: String,
+    pub from: VmState,
+    pub to: VmState,
+    pub reason: String,
+}
+
+/// `schema_version` value a pre-v2 state file deserializes to (field absent).
+fn default_legacy_schema_version() -> u32 {
+    1
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RuntimeState {
     pub id: String,
@@ -626,6 +793,14 @@ pub struct RuntimeState {
     pub image_digest: Option<String>,
     pub vm_config: VmConfig,
     pub status: VmState,
+    #[serde(default = "default_legacy_schema_version")]
+    pub schema_version: u32,
+    #[serde(default)]
+    pub stop_requested: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub status_since: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub transitions: Vec<TransitionRecord>,
     #[serde(default)]
     pub vmm_pid: i32,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -641,4 +816,34 @@ pub struct RuntimeState {
     pub started_at: Option<DateTime<Utc>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub stopped_at: Option<DateTime<Utc>>,
+}
+
+impl RuntimeState {
+    /// Record a status change in the transition ring and stamp `status_since`.
+    ///
+    /// The caller must have validated the edge with `fsm::transition_allowed`;
+    /// this method only appends history and applies the change.
+    pub fn record_transition(&mut self, to: VmState, reason: &str) {
+        let at = Utc::now().to_rfc3339();
+        self.transitions.push(TransitionRecord {
+            at: at.clone(),
+            from: self.status,
+            to,
+            reason: reason.to_string(),
+        });
+        if self.transitions.len() > TRANSITION_RING_CAPACITY {
+            let drop = self.transitions.len() - TRANSITION_RING_CAPACITY;
+            self.transitions.drain(0..drop);
+        }
+        self.status = to;
+        self.status_since = Some(at);
+    }
+
+    /// Upgrade a state file written by an older chvm in memory; the normal
+    /// save path persists the new `schema_version`.
+    pub fn backfill_schema_version(&mut self) {
+        if self.schema_version < CURRENT_SCHEMA_VERSION {
+            self.schema_version = CURRENT_SCHEMA_VERSION;
+        }
+    }
 }
