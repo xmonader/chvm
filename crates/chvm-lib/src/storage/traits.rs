@@ -16,6 +16,10 @@ pub struct PrepareConfig {
 /// Result of storage preparation.
 pub struct StorageResult {
     pub block_device: Option<String>,
+    /// Disk image format of `block_device`, for the hypervisor's
+    /// `--disk image_type=` parameter. `None` means raw (the historical
+    /// default); qcow2 overlays report `Some("qcow2")`.
+    pub block_format: Option<String>,
     pub socket_path: Option<String>,
     pub virtiofs_pid: Option<i32>,
     pub overlay_dir: Option<String>,

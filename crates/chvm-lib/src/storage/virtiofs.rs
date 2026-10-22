@@ -142,6 +142,7 @@ impl StorageBackend for VirtioFsStorage {
                 info!(pid = pid, socket = %socket_path.display(), "virtiofsd started");
                 return Ok(StorageResult {
                     block_device: None,
+                    block_format: None,
                     socket_path: Some(socket_path.to_string_lossy().to_string()),
                     virtiofs_pid: Some(pid),
                     overlay_dir: Some(overlay_dir.to_string_lossy().to_string()),
