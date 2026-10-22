@@ -453,8 +453,13 @@ fn try_decompress_with_tool(data: &[u8], dest: &Path, tool: &str) -> Result<bool
             .arg(tmp.path())
             .output()?;
 
+        // Success is judged by the ELF magic, not the exit status: the
+        // compressed vmlinux frame is followed by bzImage setup data in the
+        // same buffer, so the tools exit nonzero ("unsupported format")
+        // after decoding it correctly (zstd does this on Ubuntu 24.04
+        // kernels, making extract-host fail despite a valid vmlinux).
         let elf_magic = [0x7f, 0x45, 0x4c, 0x46];
-        if output.status.success() && output.stdout.len() > 4 && output.stdout[..4] == elf_magic {
+        if output.stdout.len() > 4 && output.stdout[..4] == elf_magic {
             std::fs::write(dest, &output.stdout)?;
             return Ok(true);
         }
@@ -511,5 +516,57 @@ mod tests {
         std::fs::write(&kernel, b"kernel").unwrap();
 
         assert!(manager.kernel_supports_virtiofs_root(&kernel));
+    }
+
+    #[test]
+    fn tool_decompress_accepts_vmlinux_with_trailing_bzimage_data() {
+        if Command::new("which")
+            .arg("zstd")
+            .output()
+            .map(|o| !o.status.success())
+            .unwrap_or(true)
+        {
+            eprintln!("zstd CLI not available — skipping");
+            return;
+        }
+
+        // Fake vmlinux: ELF magic + payload, zstd-compressed, followed by
+        // trailing garbage that stands in for bzImage setup data. The zstd CLI
+        // decodes the frame but exits nonzero on the trailing data — exactly
+        // what Ubuntu 24.04 kernels produce and what extract-host must accept.
+        let mut vmlinux = vec![0x7f, 0x45, 0x4c, 0x46];
+        vmlinux.extend_from_slice(&[0x42; 4096]);
+        let mut compressed = zstd::encode_all(&vmlinux[..], 3).unwrap();
+        compressed.extend_from_slice(&[0x00; 1024]);
+
+        let tmp = tempfile::tempdir().unwrap();
+        let src = tmp.path().join("bzimage-tail");
+        let dest = tmp.path().join("vmlinux");
+        std::fs::write(&src, &compressed).unwrap();
+
+        assert!(try_decompress_with_tool(&std::fs::read(&src).unwrap(), &dest, "zstd").unwrap());
+        let extracted = std::fs::read(&dest).unwrap();
+        assert_eq!(extracted, vmlinux);
+    }
+
+    #[test]
+    fn tool_decompress_rejects_garbage() {
+        if Command::new("which")
+            .arg("zstd")
+            .output()
+            .map(|o| !o.status.success())
+            .unwrap_or(true)
+        {
+            eprintln!("zstd CLI not available — skipping");
+            return;
+        }
+
+        let tmp = tempfile::tempdir().unwrap();
+        let dest = tmp.path().join("vmlinux");
+
+        assert!(
+            !try_decompress_with_tool(&[0x28, 0xb5, 0x2f, 0xfd, 1, 2, 3], &dest, "zstd").unwrap()
+        );
+        assert!(!dest.exists());
     }
 }
