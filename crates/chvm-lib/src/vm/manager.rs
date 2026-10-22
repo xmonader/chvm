@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use chrono::Utc;
-use tracing::{debug, info, warn};
+use tracing::{debug, error, info, warn};
 
 use crate::config::Config;
 use crate::kernel::KernelManager;
@@ -16,6 +16,7 @@ use crate::oci;
 use crate::paths::Paths;
 use crate::storage::{self, PrepareConfig, StorageBackend, StorageResult};
 use crate::vm::builder::{generate_vsock_cid, VmBuilder};
+use crate::vm::fsm;
 use crate::vm::state::*;
 
 /// StateStore manages VM state persistence on disk.
@@ -93,7 +94,11 @@ impl StateStore {
     fn load_state_inner(&self, vm_id: &str) -> Result<RuntimeState> {
         let state_path = self.state_path(vm_id);
         let data = std::fs::read_to_string(&state_path)?;
-        Ok(serde_json::from_str(&data)?)
+        let mut state: RuntimeState = serde_json::from_str(&data)?;
+        // A pre-v2 file loads with schema_version 1; upgrade in memory here
+        // and let the next save persist the new version.
+        state.backfill_schema_version();
+        Ok(state)
     }
 
     pub fn save(&mut self, state: &RuntimeState) -> Result<()> {
@@ -198,20 +203,24 @@ impl StateStore {
         self.states.values().any(|s| s.name == name)
     }
 
+    /// Update a VM's status, validating the change against the FSM edge table
+    /// and recording it in the transition ring. Rejected edges leave the
+    /// persisted state untouched.
     pub fn update_status(&mut self, vm_id: &str, status: VmState) -> Result<()> {
         let state_path = self.state_path(vm_id);
         let _lock = FileLock::exclusive(&state_path)?;
 
-        let state = self.load_state_inner(vm_id)?;
-        self.states.insert(vm_id.to_string(), state);
-
-        let state = self
-            .states
-            .get_mut(vm_id)
-            .ok_or_else(|| ChvmError::VmNotFound(vm_id.to_string()))?;
-        state.status = status;
-        let data = serde_json::to_string_pretty(state)?;
+        let mut state = self.load_state_inner(vm_id)?;
+        if !fsm::transition_allowed(state.status, status) {
+            return Err(ChvmError::Other(format!(
+                "invalid VM state transition: {} -> {}",
+                state.status, status
+            )));
+        }
+        state.record_transition(status, "update_status");
+        let data = serde_json::to_string_pretty(&state)?;
         atomic_write(&state_path, data.as_bytes())?;
+        self.states.insert(vm_id.to_string(), state);
         Ok(())
     }
 }
@@ -257,12 +266,134 @@ impl VmManager {
         let state_store = StateStore::new(&paths.vms)?;
         let image_cache = oci::ImageCache::new(&paths.images)?;
 
-        Ok(Self {
+        let mut manager = Self {
             config,
             paths,
             state_store,
             image_cache,
-        })
+        };
+        // Every CLI invocation constructs a manager before dispatching, so
+        // this is the chokepoint where a stale on-disk state self-heals:
+        // crashed VMMs are driven to Failed (or Stopped when the user had
+        // asked for a stop), with leftover resources cleaned up.
+        manager.reconcile_at_startup();
+        Ok(manager)
+    }
+
+    /// Best-effort startup reconcile, runnable from the synchronous `new`.
+    /// Uses the ambient multi-thread runtime when there is one (the CLI), and
+    /// a throwaway current-thread runtime in plain sync contexts (library
+    /// use, unit tests). Inside an ambient *current-thread* runtime blocking
+    /// is impossible, so the sweep is skipped there and left to the next
+    /// explicit `refresh_status`/`reconcile` call.
+    fn reconcile_at_startup(&mut self) {
+        match tokio::runtime::Handle::try_current() {
+            Ok(handle) if handle.runtime_flavor() == tokio::runtime::RuntimeFlavor::MultiThread => {
+                if let Err(e) = tokio::task::block_in_place(|| handle.block_on(self.reconcile())) {
+                    warn!(error = %e, "Startup reconcile failed");
+                }
+            }
+            Ok(_) => {
+                debug!("current-thread runtime: skipping blocking startup reconcile");
+            }
+            Err(_) => match tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+            {
+                Ok(rt) => {
+                    if let Err(e) = rt.block_on(self.reconcile()) {
+                        warn!(error = %e, "Startup reconcile failed");
+                    }
+                }
+                Err(e) => warn!(error = %e, "Failed to build runtime for startup reconcile"),
+            },
+        }
+    }
+
+    /// Drive one VM state through a validated FSM edge.
+    ///
+    /// This is the single chokepoint for status changes: the edge is checked
+    /// against `fsm::transition_allowed`; on success the change is recorded in
+    /// the transition ring (with `status_since` stamped) and applied to
+    /// `state` (the caller persists). On a rejected edge an error is logged
+    /// and the state is left untouched.
+    ///
+    /// Returns true when the transition was applied.
+    fn transition(&mut self, state: &mut RuntimeState, to: VmState, reason: &str) -> bool {
+        let from = state.status;
+        if !fsm::transition_allowed(from, to) {
+            error!(
+                vm_id = %state.id,
+                from = %from,
+                to = %to,
+                reason = %reason,
+                "Refusing invalid VM state transition"
+            );
+            return false;
+        }
+        state.record_transition(to, reason);
+        true
+    }
+
+    /// Liveness sweep over all VMs: any VM recorded as Running whose VMM
+    /// process is gone is driven through a valid FSM edge to Stopped (the
+    /// user had requested a stop) or Failed (unexpected exit), with its
+    /// network/storage/socket artifacts cleaned up first. Idempotent and
+    /// cheap when nothing is wrong. Returns the number of VMs repaired.
+    async fn sweep_dead_vms(&mut self) -> Result<usize> {
+        let mut repaired = 0;
+        let ids: Vec<String> = self.state_store.states.keys().cloned().collect();
+        for id in ids {
+            let Some(state) = self.state_store.states.get(&id).cloned() else {
+                continue;
+            };
+            // A VM is alive only if its PID still maps to a cloud-hypervisor
+            // whose cmdline carries this VM's unique api-socket path; a bare
+            // "cloud-hypervisor" match would false-positive on PID reuse.
+            let alive = state.vmm_pid > 0
+                && state
+                    .vm_config
+                    .api_socket_path()
+                    .map(|sock| process_is_vm(state.vmm_pid, &sock))
+                    .unwrap_or(false);
+            if state.status == VmState::Running && !alive {
+                info!(vm_id = %id, "Detected dead VM process, cleaning up resources");
+
+                if state.vm_config.network.mode != NetworkMode::None {
+                    if let Err(e) = self.teardown_network(&state).await {
+                        warn!(vm_id = %id, error = %e, "Failed to teardown network for dead VM");
+                    }
+                }
+
+                self.cleanup_storage(&state);
+                self.cleanup_runtime_artifacts(&self.paths.vm_dir(&id));
+
+                let mut updated = state;
+                if updated.stop_requested {
+                    self.transition(&mut updated, VmState::Stopped, "stopped by request");
+                } else {
+                    let reason =
+                        format!("vmm process exited unexpectedly (pid {})", updated.vmm_pid);
+                    self.transition(&mut updated, VmState::Failed, &reason);
+                }
+                updated.stopped_at = Some(Utc::now());
+                if let Some(ref mut ns) = updated.network_state {
+                    ns.mycelium_health = None;
+                }
+                if let Err(e) = self.state_store.save(&updated) {
+                    warn!(vm_id = %id, error = %e, "Failed to persist repaired status");
+                }
+                repaired += 1;
+            }
+        }
+        Ok(repaired)
+    }
+
+    /// Startup reconciliation: liveness sweep plus artifact cleanup, so any
+    /// chvm invocation repairs state left inconsistent by a crash. Also runs
+    /// on `VmManager::new`; exposed for explicit use and tests.
+    pub async fn reconcile(&mut self) -> Result<usize> {
+        self.sweep_dead_vms().await
     }
 
     /// Pull an OCI image into the cache.
@@ -348,6 +479,10 @@ impl VmManager {
             image_digest,
             vm_config,
             status: VmState::Created,
+            schema_version: CURRENT_SCHEMA_VERSION,
+            stop_requested: false,
+            status_since: None,
+            transitions: Vec::new(),
             vmm_pid: 0,
             exit_code: None,
             network_state: None,
@@ -423,7 +558,11 @@ impl VmManager {
             Ok(pid) => pid,
             Err(e) => {
                 self.cleanup_failed_start(&state, &vm_dir).await;
-                state.status = VmState::Failed;
+                if state.status != VmState::Failed {
+                    // Created/Stopped -> Failed; a VM already marked Failed
+                    // stays Failed (no self-transition edge exists).
+                    self.transition(&mut state, VmState::Failed, "vmm launch failed");
+                }
                 state.stopped_at = Some(Utc::now());
                 state.vmm_pid = 0;
                 state.network_state = None;
@@ -435,7 +574,10 @@ impl VmManager {
             }
         };
 
-        state.status = VmState::Running;
+        // A completed start cancels any stop request recorded by an earlier
+        // stop that never finished (e.g. chvm crashed mid-stop).
+        state.stop_requested = false;
+        self.transition(&mut state, VmState::Running, "started");
         state.started_at = Some(Utc::now());
         state.vmm_pid = pid;
 
@@ -462,6 +604,12 @@ impl VmManager {
     /// Running VM. Assumes the caller holds the per-VM op lock.
     async fn stop_running(&mut self, state: &mut RuntimeState) -> Result<()> {
         info!(vm_id = %state.id, "Stopping VM");
+
+        // Record the user's intent before touching the process: if this chvm
+        // dies before the stop completes, the next invocation's reconcile
+        // sees a dead pid with stop_requested set and lands the VM in
+        // Stopped instead of Failed.
+        state.stop_requested = true;
 
         // Try graceful shutdown via API
         let api_socket = state
@@ -510,11 +658,11 @@ impl VmManager {
         // Cleanup storage (virtiofsd processes, overlays)
         self.cleanup_storage(state);
 
-        state.status = if died {
-            VmState::Stopped
+        if died {
+            self.transition(state, VmState::Stopped, "stopped by request");
         } else {
-            VmState::Failed
-        };
+            self.transition(state, VmState::Failed, "vmm did not exit after SIGKILL");
+        }
         state.stopped_at = Some(Utc::now());
         self.state_store.save(state)?;
 
@@ -566,6 +714,12 @@ impl VmManager {
     /// Get a specific VM by ID or name.
     pub fn get(&mut self, id_or_name: &str) -> Result<RuntimeState> {
         self.state_store.resolve_clone(id_or_name)
+    }
+
+    /// Transition history (oldest first, capped at 32 entries) recorded for
+    /// a VM, for display by the CLI.
+    pub fn vm_events(&self, id_or_name: &str) -> Result<Vec<TransitionRecord>> {
+        Ok(self.state_store.resolve(id_or_name)?.transitions.clone())
     }
 
     /// Read VM logs.
@@ -641,46 +795,11 @@ impl VmManager {
     }
 
     /// Refresh VM statuses by checking process liveness.
-    /// When a VM's process is found dead, cleans up network and storage resources
-    /// before marking it as stopped.
+    /// When a VM's process is found dead, cleans up network and storage
+    /// resources, then drives the state to Stopped (stop was requested) or
+    /// Failed (unexpected exit) through the FSM.
     pub async fn refresh_status(&mut self) -> Result<()> {
-        let ids: Vec<String> = self.state_store.states.keys().cloned().collect();
-        for id in ids {
-            let Some(state) = self.state_store.states.get(&id).cloned() else {
-                continue;
-            };
-            // A VM is alive only if its PID still maps to a cloud-hypervisor
-            // whose cmdline carries this VM's unique api-socket path; a bare
-            // "cloud-hypervisor" match would false-positive on PID reuse.
-            let alive = state.vmm_pid > 0
-                && state
-                    .vm_config
-                    .api_socket_path()
-                    .map(|sock| process_is_vm(state.vmm_pid, &sock))
-                    .unwrap_or(false);
-            if state.status == VmState::Running && !alive {
-                info!(vm_id = %id, "Detected dead VM process, cleaning up resources");
-
-                if state.vm_config.network.mode != NetworkMode::None {
-                    if let Err(e) = self.teardown_network(&state).await {
-                        warn!(vm_id = %id, error = %e, "Failed to teardown network for dead VM");
-                    }
-                }
-
-                self.cleanup_storage(&state);
-                self.cleanup_runtime_artifacts(&self.paths.vm_dir(&id));
-
-                let mut updated = state;
-                updated.status = VmState::Stopped;
-                updated.stopped_at = Some(Utc::now());
-                if let Some(ref mut ns) = updated.network_state {
-                    ns.mycelium_health = None;
-                }
-                if let Err(e) = self.state_store.save(&updated) {
-                    warn!(vm_id = %id, error = %e, "Failed to persist stopped status");
-                }
-            }
-        }
+        self.sweep_dead_vms().await?;
         Ok(())
     }
 
@@ -1734,6 +1853,10 @@ mod tests {
                 state_dir: None,
             },
             status: VmState::Created,
+            schema_version: CURRENT_SCHEMA_VERSION,
+            stop_requested: false,
+            status_since: None,
+            transitions: vec![],
             vmm_pid: 0,
             exit_code: None,
             network_state: None,
@@ -2126,5 +2249,266 @@ mod tests {
 
         let result = manager.remove_image("ubuntu:24.04");
         assert!(matches!(result, Err(ChvmError::ImageInUse(_))));
+    }
+
+    // FSM transition helper tests
+
+    /// A pid that is guaranteed dead: spawned and reaped here, so its
+    /// /proc entry is gone. PID-reuse-safe anyway — `process_is_vm` also
+    /// requires the unique api-socket path in the cmdline.
+    fn dead_pid() -> i32 {
+        let mut child = std::process::Command::new("true").spawn().unwrap();
+        let pid = child.id() as i32;
+        child.wait().unwrap();
+        pid
+    }
+
+    fn dead_running_state(tmp: &tempfile::TempDir, id: &str, name: &str) -> RuntimeState {
+        let mut state = make_state(id, name);
+        state.status = VmState::Running;
+        state.vmm_pid = dead_pid();
+        state.vm_config.state_dir = Some(
+            tmp.path()
+                .join("chvm/vms")
+                .join(id)
+                .to_string_lossy()
+                .to_string(),
+        );
+        state
+    }
+
+    #[test]
+    fn transition_applies_valid_edge_and_records_ring() {
+        let tmp = tempfile::tempdir().unwrap();
+        let paths = Paths::new(tmp.path().join("chvm"));
+        let mut manager = VmManager::new(Config::default(), paths).unwrap();
+
+        let mut state = make_state("vm1", "vm1");
+        assert!(manager.transition(&mut state, VmState::Running, "started"));
+
+        assert_eq!(state.status, VmState::Running);
+        assert_eq!(state.transitions.len(), 1);
+        let rec = &state.transitions[0];
+        assert_eq!(rec.from, VmState::Created);
+        assert_eq!(rec.to, VmState::Running);
+        assert_eq!(rec.reason, "started");
+        assert!(state.status_since.is_some());
+    }
+
+    #[test]
+    fn transition_rejects_invalid_edge_without_touching_state() {
+        let tmp = tempfile::tempdir().unwrap();
+        let paths = Paths::new(tmp.path().join("chvm"));
+        let mut manager = VmManager::new(Config::default(), paths).unwrap();
+
+        let mut state = make_state("vm1", "vm1");
+        state.status = VmState::Stopped;
+        assert!(!manager.transition(&mut state, VmState::Failed, "nope"));
+
+        assert_eq!(state.status, VmState::Stopped);
+        assert!(state.transitions.is_empty());
+        assert!(state.status_since.is_none());
+    }
+
+    #[test]
+    fn update_status_applies_valid_edge_and_persists_history() {
+        let (_tmp, mut store) = setup_store_with_states(&[("a1b2c3d4e5f6", "myvm")]);
+        store
+            .update_status("a1b2c3d4e5f6", VmState::Running)
+            .unwrap();
+
+        let reloaded = store.load_state("a1b2c3d4e5f6").unwrap();
+        assert_eq!(reloaded.status, VmState::Running);
+        assert_eq!(reloaded.transitions.len(), 1);
+        assert_eq!(reloaded.transitions[0].from, VmState::Created);
+        assert_eq!(reloaded.transitions[0].to, VmState::Running);
+    }
+
+    #[test]
+    fn update_status_rejects_invalid_edge() {
+        let (_tmp, mut store) = setup_store_with_states(&[("a1b2c3d4e5f6", "myvm")]);
+        // Created -> Stopped is not a legal edge (Created -> Failed is, via
+        // the launch-failure path).
+        let result = store.update_status("a1b2c3d4e5f6", VmState::Stopped);
+        assert!(matches!(result, Err(ChvmError::Other(_))));
+        assert_eq!(store.get("a1b2c3d4e5f6").unwrap().status, VmState::Created);
+    }
+
+    #[test]
+    fn state_store_backfills_schema_version_on_load() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut store = StateStore::new(tmp.path()).unwrap();
+        let state = make_state("vm1", "vm1");
+        store.save(&state).unwrap();
+
+        // Strip every v2 field to emulate a legacy v1 file on disk.
+        let path = tmp.path().join("vm1").join("state.json");
+        let mut value: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        for key in [
+            "schema_version",
+            "stop_requested",
+            "status_since",
+            "transitions",
+        ] {
+            value.as_object_mut().unwrap().remove(key);
+        }
+        std::fs::write(&path, serde_json::to_string_pretty(&value).unwrap()).unwrap();
+
+        let store = StateStore::new(tmp.path()).unwrap();
+        assert_eq!(
+            store.get("vm1").unwrap().schema_version,
+            CURRENT_SCHEMA_VERSION
+        );
+    }
+
+    #[tokio::test]
+    async fn reconcile_marks_crashed_vm_failed_with_reason() {
+        let tmp = tempfile::tempdir().unwrap();
+        let paths = Paths::new(tmp.path().join("chvm"));
+        paths.ensure_dirs().unwrap();
+        let mut manager = VmManager::new(Config::default(), paths).unwrap();
+
+        let crashed = dead_running_state(&tmp, "crashed-vm", "crashed");
+        let pid = crashed.vmm_pid;
+        manager.state_store.save(&crashed).unwrap();
+
+        let repaired = manager.reconcile().await.unwrap();
+        assert_eq!(repaired, 1);
+
+        let state = manager.state_store.get("crashed-vm").unwrap();
+        assert_eq!(state.status, VmState::Failed);
+        assert!(state.stopped_at.is_some());
+        assert!(state.status_since.is_some());
+        assert_eq!(state.transitions.len(), 1);
+        let rec = &state.transitions[0];
+        assert_eq!(rec.from, VmState::Running);
+        assert_eq!(rec.to, VmState::Failed);
+        assert_eq!(
+            rec.reason,
+            format!("vmm process exited unexpectedly (pid {pid})")
+        );
+    }
+
+    #[tokio::test]
+    async fn reconcile_marks_stop_requested_vm_stopped_with_reason() {
+        let tmp = tempfile::tempdir().unwrap();
+        let paths = Paths::new(tmp.path().join("chvm"));
+        paths.ensure_dirs().unwrap();
+        let mut manager = VmManager::new(Config::default(), paths).unwrap();
+
+        let mut stopping = dead_running_state(&tmp, "stopping-vm", "stopping");
+        stopping.stop_requested = true;
+        manager.state_store.save(&stopping).unwrap();
+
+        let repaired = manager.reconcile().await.unwrap();
+        assert_eq!(repaired, 1);
+
+        let state = manager.state_store.get("stopping-vm").unwrap();
+        assert_eq!(state.status, VmState::Stopped);
+        assert_eq!(state.transitions.len(), 1);
+        let rec = &state.transitions[0];
+        assert_eq!(rec.from, VmState::Running);
+        assert_eq!(rec.to, VmState::Stopped);
+        assert_eq!(rec.reason, "stopped by request");
+    }
+
+    #[tokio::test]
+    async fn reconcile_leaves_live_and_terminal_vms_alone() {
+        let tmp = tempfile::tempdir().unwrap();
+        let paths = Paths::new(tmp.path().join("chvm"));
+        paths.ensure_dirs().unwrap();
+        let mut manager = VmManager::new(Config::default(), paths).unwrap();
+
+        // Terminal states are skipped even when the recorded pid is dead.
+        let mut stopped = make_state("stopped-vm", "stopped-vm");
+        stopped.status = VmState::Stopped;
+        let mut failed = make_state("failed-vm", "failed-vm");
+        failed.status = VmState::Failed;
+        failed.vmm_pid = dead_pid();
+        failed.vm_config.state_dir = Some(
+            tmp.path()
+                .join("chvm/vms/failed-vm")
+                .to_string_lossy()
+                .to_string(),
+        );
+        manager.state_store.save(&stopped).unwrap();
+        manager.state_store.save(&failed).unwrap();
+
+        let repaired = manager.reconcile().await.unwrap();
+        assert_eq!(repaired, 0);
+        assert_eq!(
+            manager.state_store.get("stopped-vm").unwrap().status,
+            VmState::Stopped
+        );
+        assert_eq!(
+            manager.state_store.get("failed-vm").unwrap().status,
+            VmState::Failed
+        );
+    }
+
+    #[tokio::test]
+    async fn reconcile_is_idempotent() {
+        let tmp = tempfile::tempdir().unwrap();
+        let paths = Paths::new(tmp.path().join("chvm"));
+        paths.ensure_dirs().unwrap();
+        let mut manager = VmManager::new(Config::default(), paths).unwrap();
+
+        let crashed = dead_running_state(&tmp, "crashed-vm", "crashed");
+        manager.state_store.save(&crashed).unwrap();
+
+        assert_eq!(manager.reconcile().await.unwrap(), 1);
+        assert_eq!(manager.reconcile().await.unwrap(), 0);
+
+        let state = manager.state_store.get("crashed-vm").unwrap();
+        assert_eq!(state.status, VmState::Failed);
+        assert_eq!(state.transitions.len(), 1, "no duplicate repair records");
+    }
+
+    #[test]
+    fn manager_construction_reconciles_preexisting_crashed_vm() {
+        let tmp = tempfile::tempdir().unwrap();
+        let paths = Paths::new(tmp.path().join("chvm"));
+        paths.ensure_dirs().unwrap();
+
+        let crashed = dead_running_state(&tmp, "crashed-vm", "crashed");
+        {
+            let mut store = StateStore::new(&paths.vms).unwrap();
+            store.save(&crashed).unwrap();
+        }
+
+        // No ambient runtime here (plain #[test]), so new() drives the
+        // reconcile on a throwaway runtime.
+        let manager = VmManager::new(Config::default(), paths).unwrap();
+        let state = manager.state_store.get("crashed-vm").unwrap();
+        assert_eq!(state.status, VmState::Failed);
+        assert_eq!(state.transitions.len(), 1);
+        assert!(state.transitions[0]
+            .reason
+            .contains("vmm process exited unexpectedly"));
+    }
+
+    #[test]
+    fn vm_events_returns_recorded_history() {
+        let tmp = tempfile::tempdir().unwrap();
+        let paths = Paths::new(tmp.path().join("chvm"));
+        let mut manager = VmManager::new(Config::default(), paths).unwrap();
+
+        let mut state = make_state("vm1", "my-vm");
+        manager.transition(&mut state, VmState::Running, "started");
+        manager.state_store.save(&state).unwrap();
+
+        let events = manager.vm_events("vm1").unwrap();
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].from, VmState::Created);
+        assert_eq!(events[0].to, VmState::Running);
+        assert_eq!(events[0].reason, "started");
+
+        // Resolution by name works too; unknown VMs error out.
+        assert_eq!(manager.vm_events("my-vm").unwrap().len(), 1);
+        assert!(matches!(
+            manager.vm_events("nope"),
+            Err(ChvmError::VmNotFound(_))
+        ));
     }
 }
